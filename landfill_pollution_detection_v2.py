@@ -15,6 +15,7 @@ Structure:
 
 # Imports and basic config
 import os
+from dotenv import load_dotenv
 import io
 import json
 import time
@@ -43,7 +44,8 @@ import lightgbm as lgb
 # User-configurable: landfill coordinates (Calabasas)
 LANDFILL = {"name": "Calabasas Landfill", "lat": 34.1439, "lon": -118.6615}
 
-# Environment variables (replace here)
+# Environment variables
+load_dotenv()
 FIRMS_API_KEY = os.getenv("FIRMS_API_KEY")          #NASA FIRMS API
 EARTHDATA_USER = os.getenv("EARTHDATA_USER")        # Earthdata username for Harmony/Earthaccess
 EARTHDATA_PASS = os.getenv("EARTHDATA_PASS")        # Earthdata password
