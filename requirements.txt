@@ -1,0 +1,22 @@
+# --- App / UI ---
+streamlit>=1.36
+
+# --- Core data / HTTP ---
+numpy>=1.24
+pandas>=2.0
+requests>=2.31
+python-dotenv>=1.0
+
+# --- Plotting (local charts; Streamlit also has built-in charts) ---
+matplotlib>=3.7
+
+# --- Modeling ---
+lightgbm>=4.0
+
+# --- Satellite / NetCDF (TEMPO via Harmony) ---
+harmony-py>=0.6
+xarray>=2023.6.0
+netCDF4>=1.6
+h5netcdf>=1.2
+h5py>=3.9
+cftime>=1.6
