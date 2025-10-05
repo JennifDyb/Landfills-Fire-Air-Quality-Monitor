@@ -5,9 +5,51 @@ import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
 import math
+import base64
+from pathlib import Path
 
 # Import your core pipelines
 import landfill_pollution_detection_v2 as core
+
+def set_app_background(image_path: str, blur_px: int = 0, dim: float = 0.0):
+    """
+    Sets a full-page background image using base64 CSS injection.
+    - image_path: path relative to the repo root (e.g., 'assets/app_bg.jpg')
+    - blur_px: optional CSS blur for readability (e.g., 2–6)
+    - dim: 0.0–1.0 overlay darkening for contrast (0 = none, 0.3 = subtle)
+    """
+    img_file = Path(image_path)
+    if not img_file.exists():
+        st.warning(f"Background image not found: {image_path}")
+        return
+    b64 = base64.b64encode(img_file.read_bytes()).decode()
+    # Optional dark overlay using linear-gradient, then the image
+    overlay = f"linear-gradient(rgba(0,0,0,{dim}), rgba(0,0,0,{dim})), " if dim > 0 else ""
+    css = f"""
+    <style>
+      /* Page background */
+      [data-testid="stAppViewContainer"] {{
+        background: {overlay} url("data:image/{img_file.suffix[1:]};base64,{b64}") center/cover no-repeat fixed;
+        {'backdrop-filter: blur(' + str(blur_px) + 'px);' if blur_px > 0 else ''}
+      }}
+      /* Transparent header */
+      [data-testid="stHeader"] {{ background: rgba(0,0,0,0); }}
+      /* Slightly translucent main block for readability */
+      .main .block-container {{
+        background: rgba(255,255,255,0.85);
+        border-radius: 12px;
+        padding: 1rem 1.25rem;
+      }}
+      /* Sidebar readability */
+      [data-testid="stSidebar"] > div:first-child {{
+        background: rgba(255,255,255,0.85);
+      }}
+    </style>
+    """
+    st.markdown(css, unsafe_allow_html=True)
+
+set_app_background("assets/app_image.jpg", blur_px=0, dim=0.15)
+
 
 APP_TITLE = "Landfills Fire & Air Quality Monitor"
 APP_PURPOSE = (
