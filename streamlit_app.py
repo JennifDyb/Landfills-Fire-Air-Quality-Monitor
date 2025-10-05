@@ -108,7 +108,14 @@ if page.lower() == "home":
         5. **Forecast AQI** for 72 hours.  
         """
     )
-    st.info("Go to the **Monitor** page to run a live check.")
+    st.info("Run a live check from the Monitor page.")
+
+    # Centered call-to-action button
+    cta1, cta2, cta3 = st.columns([1, 1, 1])
+    with cta2:
+        if st.button("➡️ Go to Monitor", key="cta_monitor", type="primary"):
+            _nav("monitor")  # uses your existing nav helper
+
 
 # ---------- PAGE: MONITOR ----------
 elif page.lower() == "monitor":
