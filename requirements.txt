@@ -6,6 +6,8 @@ numpy>=1.24
 pandas>=2.0
 requests>=2.31
 python-dotenv>=0.20,<0.21 
+scikit-learn>=1.7.2
+
 
 # --- Plotting (local charts; Streamlit also has built-in charts) ---
 matplotlib>=3.7
