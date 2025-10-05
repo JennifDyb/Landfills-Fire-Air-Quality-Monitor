@@ -128,23 +128,30 @@ elif page.lower() == "monitor":
     lf = set_landfill_by_name(selected_name)
     lat, lon = float(lf["lat"]), float(lf["lon"])
 
-    # Show coords + optional radius
+    
+   # Show coords + current radius (read-only on this row)
     c1, c2, c3 = st.columns([1, 1, 1])
     with c1:
         st.metric("Latitude", f"{lat:.6f}")
     with c2:
         st.metric("Longitude", f"{lon:.6f}")
     with c3:
-        radius_km = st.slider("Detection radius (km)", min_value=1, max_value=20, value=5, step=1)
+        st.metric("Radius (km)", st.session_state.get("radius_km", 5))
 
-
+    # Editable inputs
     col1, col2, col3 = st.columns([1,1,1])
     with col1:
         lat = st.number_input("Latitude", value=float(lat), format="%.6f")
     with col2:
         lon = st.number_input("Longitude", value=float(lon), format="%.6f")
     with col3:
-        radius_km = st.slider("Detection radius (km)", min_value=1, max_value=20, value=5, step=1)
+        radius_km = st.slider(
+            "Detection radius (km)",
+            min_value=1, max_value=20, value=st.session_state.get("radius_km", 5), step=1,
+            key="radius_km_main"
+        )
+    st.session_state["radius_km"] = radius_km
+
 
     st.checkbox("Enable in-app notifications", value=st.session_state["notifications"], key="notifications")
 
