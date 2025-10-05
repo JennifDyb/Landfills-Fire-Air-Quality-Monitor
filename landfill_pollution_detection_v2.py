@@ -42,8 +42,70 @@ import xarray as xr
 # For LightGBM
 import lightgbm as lgb
 
-# User-configurable: landfill coordinates (Calabasas)
-LANDFILL = {"name": "Calabasas Landfill", "lat": 34.1439, "lon": -118.6615}
+# User-configurable: landfill coordinates
+# ---- Landfills catalog (Southern CA) ----
+LANDFILLS = {
+    "Calabasas Landfill": {
+        "name": "Calabasas Landfill",
+        "city": "Agoura (LA County)",
+        "lat": 34.141333,   # from EPA GHGRP (34° 08.48' N)
+        "lon": -118.711333,  # from EPA GHGRP (118° 42.68' W)
+    },
+    "Simi Valley Landfill": {
+        "name": "Simi Valley Landfill & Recycling Center",
+        "city": "Simi Valley",
+        "lat": 34.2952778,
+        "lon": -118.7958333,
+    },
+    "Azusa Land Reclamation site": {
+        "name": "Azusa Land Reclamation Co. Landfill",
+        "city": "Azusa",
+        "lat": 34.1143333,   # ≈ 34°06.86' N
+        "lon": -117.9286667, # ≈ 117°55.72' W
+    },
+    "Badlands Sanitary Landfill in Moreno Valley": {
+        "name": "Badlands Sanitary Landfill",
+        "city": "Moreno Valley (Riverside County)",
+        "lat": 33.953421,
+        "lon": -117.120461,
+    },
+    "El Sobrante Landfill in Corona": {
+        "name": "El Sobrante Landfill",
+        "city": "Corona (Riverside County)",
+        "lat": 33.7811667,   # ≈ 33°46.87' N
+        "lon": -117.4725,    # ≈ 117°28.35' W
+    },
+    "Lamb Canyon Landfill in Beaumont": {
+        "name": "Lamb Canyon Landfill",
+        "city": "Beaumont (Riverside County)",
+        "lat": 33.8906389,   # ≈ 33°53'26.3" N
+        "lon": -117.0023333, # ≈ 117°00'08.4" W
+    },
+    "Sunshine Canyon Landfill in Sylmar": {
+        "name": "Sunshine Canyon Landfill",
+        "city": "Sylmar (Los Angeles)",
+        "lat": 34.3302778,
+        "lon": -118.5163889,
+    },
+}
+
+# Default selection (keep your previous behavior)
+LANDFILL = LANDFILLS["Calabasas Landfill"]
+
+def set_landfill_by_name(name: str):
+    """Set the global LANDFILL to one of the entries in LANDFILLS by display name."""
+    if name not in LANDFILLS:
+        raise KeyError(f"Unknown landfill '{name}'. Available: {list(LANDFILLS.keys())}")
+    globals()["LANDFILL"] = LANDFILLS[name]
+    return LANDFILL
+
+def available_landfills():
+    """Convenience: list of names for UI pickers."""
+    return list(LANDFILLS.keys())
+
+
+
+
 
 # Environment variables
 #load_dotenv()

@@ -115,8 +115,12 @@ elif page.lower() == "monitor":
     st.subheader("Monitor: run a check for fires and AQI")
 
     # Defaults to Calabasas landfill (demo)
-    demo_lat = core.LANDFILL.get("lat", 34.1439)
-    demo_lon = core.LANDFILL.get("lon", -118.6615)
+    #demo_lat = core.LANDFILL.get("lat", 34.1439)
+    #demo_lon = core.LANDFILL.get("lon", -118.6615)
+
+    choice = st.selectbox("Choose landfill", available_landfills(), index=available_landfills().index("Calabasas Landfill"))
+    lanfill = set_landfill_by_name(choice)
+    st.caption(f"Selected: {lanfill['name']} ({lanfill['city']}) — lat {lanfill['lat']:.5f}, lon {lanfill['lon']:.5f}")
 
     col1, col2, col3 = st.columns([1,1,1])
     with col1:
