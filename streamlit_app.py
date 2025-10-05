@@ -14,19 +14,10 @@ import matplotlib as mpl
 # Import your core pipelines
 import landfill_pollution_detection_v2 as core
 
-# ---------- Layout ----------
-st.set_page_config(page_title=APP_TITLE, page_icon="🔥", layout="wide")
-page_key = _get_query_page("home")
-valid_keys = ["home", "monitor", "results"]
-try:
-    idx = valid_keys.index(page_key)
-except ValueError:
-    idx = 0
-page = st.sidebar.radio("Pages", ["Home", "Monitor", "Results"], index=idx)
-
-st.title(APP_TITLE)
-
-# ----------------------------------
+import base64
+from pathlib import Path
+import streamlit as st
+import matplotlib as mpl
 
 def apply_sane_theme(
     bg_image="assets/app_image.jpg",
@@ -290,7 +281,17 @@ def plot_aqi_bar(value: float | None, show_label=True, height=0.35):
     plt.tight_layout()
     return fig
 
+# ---------- Layout ----------
+st.set_page_config(page_title=APP_TITLE, page_icon="🔥", layout="wide")
+page_key = _get_query_page("home")
+valid_keys = ["home", "monitor", "results"]
+try:
+    idx = valid_keys.index(page_key)
+except ValueError:
+    idx = 0
+page = st.sidebar.radio("Pages", ["Home", "Monitor", "Results"], index=idx)
 
+st.title(APP_TITLE)
 
 # ---------- PAGE: HOME ----------
 if page.lower() == "home":
