@@ -182,6 +182,12 @@ elif page.lower() == "monitor":
                 run_parallel=True,
                 forecast_horizon_h=72
             )
+
+
+            out["landfill_name"] = st.session_state.get("selected_landfill_name", selected_name)
+            out["lat"] = float(lat)
+            out["lon"] = float(lon)
+
             st.session_state["last_run"] = out
 
         if out.get("fire_detected"):
@@ -201,6 +207,11 @@ elif page.lower() == "monitor":
         run_time = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%SZ")
         fire = bool(lr.get("fire_detected"))
         fused = lr.get("fused_aqi")
+
+
+        landfill_name = lr.get("landfill_name", st.session_state.get("selected_landfill_name", "—"))
+        coords_str = _format_latlon(lr.get("lat", None) or lat, lr.get("lon", None) or lon)
+        st.markdown(f"**Landfill checked:** {landfill_name}  \n**Coordinates:** {coords_str}")
 
         c1, c2, c3 = st.columns([1,1,3])
         with c1:
