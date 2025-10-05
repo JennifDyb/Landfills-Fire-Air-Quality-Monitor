@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 
+# Use of AI for code review
+
 """
-# Calabasas Landfill — End-to-End AQ Monitoring Prototype (5 Pipelines)
-Purpose: Detect fires near the Calabasas landfill and produce satellite AQI, ground AQI, fused AQI, and a 72-hour hourly AQI forecast using LightGBM.  
+# Landfill — End-to-End AQ Monitoring Prototype (5 Pipelines)
+Purpose: Detect fires near landfills and produce satellite AQI, ground AQI, fused AQI, and a 72-hour hourly AQI forecast using LightGBM.  
 Structure:
 - Pipeline 1: FIRMS fire detection (real + fallback)  
 - Pipeline 2: TEMPO via HarmonyPy — multi-pollutant satellite subset (real + fallback)  
