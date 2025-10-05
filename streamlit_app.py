@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import math
 import base64
 from pathlib import Path
+import matplotlib as mpl
 
 # Import your core pipelines
 import landfill_pollution_detection_v2 as core
@@ -48,8 +49,58 @@ def set_app_background(image_path: str, blur_px: int = 0, dim: float = 0.0):
     """
     st.markdown(css, unsafe_allow_html=True)
 
-set_app_background("assets/app_image.jpg", blur_px=0, dim=0.15)
 
+def enforce_text_color(color="#0f172a", link_color="#2563eb", sidebar_color=None):
+    """
+    Force app text colors via CSS.
+    - color: main text color (e.g., #0f172a for dark slate, #f8fafc for near-white)
+    - link_color: links
+    - sidebar_color: sidebar text (defaults to color)
+    """
+    if sidebar_color is None:
+        sidebar_color = color
+
+    st.markdown(f"""
+    <style>
+      /* Most text in the app */
+      [data-testid="stAppViewContainer"] * {{
+        color: {color} !important;
+      }}
+
+      /* Sidebar */
+      [data-testid="stSidebar"] * {{
+        color: {sidebar_color} !important;
+      }}
+
+      /* Links */
+      a, a:visited {{
+        color: {link_color} !important;
+      }}
+
+      /* Metric widget numbers and labels */
+      [data-testid="stMetricValue"], [data-testid="stMetricLabel"], [data-testid="stMetricDelta"] * {{
+        color: {color} !important;
+      }}
+
+      /* Expander titles */
+      details summary {{
+        color: {color} !important;
+      }}
+    </style>
+    """, unsafe_allow_html=True)
+
+    # Match Matplotlib plot text to the chosen color
+    mpl.rcParams.update({
+        "text.color": color,
+        "axes.labelcolor": color,
+        "xtick.color": color,
+        "ytick.color": color,
+        "figure.facecolor": (1,1,1,0),  # transparent-ish
+        "axes.facecolor": (1,1,1,0.85)  # readable panel for charts
+    })
+
+set_app_background("assets/app_image.jpg", blur_px=0, dim=0.45)
+enforce_text_color("#f8fafc", link_color="#93c5fd")  # light text
 
 APP_TITLE = "Landfills Fire & Air Quality Monitor"
 APP_PURPOSE = (
