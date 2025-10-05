@@ -1444,6 +1444,7 @@ def train_and_forecast_safe(history_df: pd.DataFrame,
             print("Training error:", e)
         return pd.DataFrame(), {"confidence": None, "rmse": None, "baseline_rmse": None,
                                 "fallback_reason": f"training failed: {e}"}
+    
     # 4) Plot forecast
     plt.figure(figsize=(12, 5))
     plt.plot(forecast_df["datetime"], forecast_df["pred_AQI"], label="Predicted fused AQI")
@@ -1457,10 +1458,6 @@ def train_and_forecast_safe(history_df: pd.DataFrame,
     plt.grid(True)
     plt.tight_layout()
     plt.show()
-
-except Exception as e:
-    print("Training error:", e)
-    forecast_df = pd.DataFrame()
 
 
 # ===== Orchestrator / Trigger =====
