@@ -14,183 +14,61 @@ import matplotlib as mpl
 # Import your core pipelines
 import landfill_pollution_detection_v2 as core
 
-def set_app_background(image_path: str, blur_px: int = 0, dim: float = 0.45):
-    """
-    Full-page background with optional dark overlay (dim) and blur.
-    """
-    img_file = Path(image_path)
-    if not img_file.exists():
-        st.warning(f"Background image not found: {image_path}")
-        return
-    b64 = base64.b64encode(img_file.read_bytes()).decode()
-    overlay = f"linear-gradient(rgba(0,0,0,{dim}), rgba(0,0,0,{dim})), " if dim > 0 else ""
-    css = f"""
-    <style>
-      /* Background */
-      [data-testid="stAppViewContainer"] {{
-        background: {overlay} url("data:image/{img_file.suffix[1:]};base64,{b64}") center/cover no-repeat fixed;
-        {'backdrop-filter: blur(' + str(blur_px) + 'px);' if blur_px > 0 else ''}
-      }}
-      /* Transparent top header */
-      [data-testid="stHeader"] {{ background: rgba(0,0,0,0); }}
-      /* Sidebar base (white card) */
-      [data-testid="stSidebar"] > div:first-child {{
-        background: rgba(255,255,255,0.96);
-      }}
-    </style>
-    """
-    st.markdown(css, unsafe_allow_html=True)
+import base64
+from pathlib import Path
+import streamlit as st
+import matplotlib as mpl
 
-
-def apply_theme(mode: str = "light_on_dark"):
-    """
-    Two-layer theme:
-      - MAIN AREA: light text on translucent dark card (for readability on image).
-      - SIDEBAR + FORM CONTROLS: dark-on-white (standard usability).
-      - Buttons: visible on any background.
-    """
-    if mode == "light_on_dark":
-        # Main content (over image)
-        main_text   = "#f8fafc"           # near-white
-        link_text   = "#cfe4ff"           # light link (accessible on dark)
-        card_bg     = "rgba(0,0,0,0.38)"  # translucent dark card for readability
-
-        # Sidebar and inputs (white backgrounds)
-        side_text   = "#0f172a"           # dark slate
-        input_border= "#cbd5e1"
-        placeholder = "#64748b"
-
-        # Buttons
-        button_bg   = "#2563eb"
-        button_text = "#ffffff"
-        button_brd  = "#1d4ed8"
-    else:
-        # Optional second mode (not used now)
-        main_text   = "#0f172a"
-        link_text   = "#2563eb"
-        card_bg     = "rgba(255,255,255,0.92)"
-        side_text   = "#0f172a"
-        input_border= "#cbd5e1"
-        placeholder = "#64748b"
-        button_bg   = "#2563eb"
-        button_text = "#ffffff"
-        button_brd  = "#1d4ed8"
-
-    st.markdown(f"""
-    <style>
-      /* ---------- MAIN CONTENT: light text, dark translucent card ---------- */
-      .main .block-container {{
-        background: {card_bg};
-        border-radius: 12px;
-        padding: 1rem 1.25rem;
-      }}
-      .main .block-container, .main .block-container * {{
-        color: {main_text} !important;
-      }}
-      a, a:visited {{ color: {link_text} !important; }}
-
-      /* ---------- SIDEBAR: dark text on white ---------- */
-      [data-testid="stSidebar"] * {{
-        color: {side_text} !important;
-      }}
-
-      /* ---------- FORM CONTROLS (main + sidebar) use dark text on white ---------- */
-      /* Labels */
-      label, .stSelectbox label, .stNumberInput label, .stTextInput label {{
-        color: {side_text} !important;
-      }}
-      /* Inputs proper */
-      input, textarea, select {{
-        color: {side_text} !important;
-        background: #ffffff !important;
-        border-color: {input_border} !important;
-      }}
-      ::placeholder {{
-        color: {placeholder} !important;
-        opacity: 1 !important;
-      }}
-      /* Streamlit BaseWeb select */
-      [data-baseweb="select"] * {{
-        color: {side_text} !important;  /* value + trigger text */
-      }}
-      [data-baseweb="menu"] {{
-        background: #ffffff !important; /* dropdown panel */
-      }}
-      [data-baseweb="menu"] * {{
-        color: {side_text} !important;  /* dropdown items */
-      }}
-
-      /* ---------- Buttons everywhere ---------- */
-      div.stButton > button {{
-        background-color: {button_bg} !important;
-        color: {button_text} !important;
-        border: 1px solid {button_brd} !important;
-        border-radius: 8px !important;
-        padding: 0.5rem 0.9rem !important;
-        font-weight: 600 !important;
-        box-shadow: 0 1px 2px rgba(16,24,40,0.08) !important;
-      }}
-      div.stButton > button:hover {{ filter: brightness(1.05) !important; }}
-      div.stButton > button:active {{ filter: brightness(0.95) !important; }}
-
-      /* ---------- Metrics readable on dark card ---------- */
-      [data-testid="stMetricValue"],
-      [data-testid="stMetricLabel"],
-      [data-testid="stMetricDelta"] * {{
-        color: {main_text} !important;
-      }}
-
-      /* ---------- Tables & expanders on dark card ---------- */
-      .stTable, .stTable * {{ color: {main_text} !important; }}
-      details summary {{ color: {main_text} !important; }}
-
-      /* ---------- Alerts keep good contrast on dark card ---------- */
-      .stAlert p, .stAlert div {{ color: #0f172a !important; }}  /* alert boxes are light by default */
-    </style>
-    """, unsafe_allow_html=True)
-
-    # Align Matplotlib text with MAIN area (light on dark)
-    mpl.rcParams.update({
-        "text.color": main_text,
-        "axes.labelcolor": main_text,
-        "xtick.color": main_text,
-        "ytick.color": main_text,
-        "figure.facecolor": (0,0,0,0),   # transparent figure
-        "axes.facecolor": (0,0,0,0),     # we already give the page a dark card
-        "axes.edgecolor": main_text,
-        "grid.color": "#9aa4b2"
-    })
-
-def force_main_readability(
-    card_bg="rgba(0,0,0,0.72)",   # darker translucent card
-    main_text="#f8fafc",          # near-white text
-    link_text="#cfe4ff"           # light link color
+def apply_sane_theme(
+    bg_image="assets/app_image.jpg",
+    bg_dim=0.45,                 # dark overlay on image
+    main_card_bg="rgba(0,0,0,0.78)",  # darker translucent card
+    main_text="#f8fafc",         # near-white
+    main_link="#cfe4ff",
+    text_shadow="0 1px 2px rgba(0,0,0,.75)",  # subtle halo for readability
+    sidebar_text="#0f172a",      # dark text (sidebar is light)
+    button_bg="#2563eb",
+    button_text="#ffffff",
+    button_border="#1d4ed8",
+    input_border="#cbd5e1",
+    placeholder="#64748b",
+    blur_px=0
 ):
-    """
-    Make the central content area highly readable on a busy image background:
-    - Darker translucent card behind all content
-    - Force bright text for headings/body in the main area
-    - Keep alerts legible (alerts remain light cards with dark text)
-    Uses high-specificity selectors and !important to override prior styles.
-    """
+    # --- Background image + overlay ---
+    css_bg = ""
+    img_file = Path(bg_image)
+    if img_file.exists():
+        b64 = base64.b64encode(img_file.read_bytes()).decode()
+        overlay = f"linear-gradient(rgba(0,0,0,{bg_dim}), rgba(0,0,0,{bg_dim})), " if bg_dim > 0 else ""
+        css_bg = f"""
+        [data-testid="stAppViewContainer"] {{
+          background: {overlay} url("data:image/{img_file.suffix[1:]};base64,{b64}") center/cover no-repeat fixed;
+          {'backdrop-filter: blur(' + str(blur_px) + 'px);' if blur_px > 0 else ''}
+        }}
+        """
+
     st.markdown(f"""
     <style>
-      /* Dark translucent card behind EVERYTHING in the main content column */
-      [data-testid="stAppViewContainer"] .main .block-container,
-      [data-testid="stAppViewContainer"] [data-testid="block-container"],
-      section.main > div:first-child {{
-        background: {card_bg} !important;
+      /* Background (with optional overlay) */
+      {css_bg}
+
+      /* Header transparent */
+      [data-testid="stHeader"] {{ background: rgba(0,0,0,0) !important; }}
+
+      /* -------- Main content: stronger dark card + bright text + text shadow -------- */
+      [data-testid="stAppViewContainer"] .main .block-container {{
+        background: {main_card_bg} !important;
         border-radius: 12px !important;
         padding: 1rem 1.25rem !important;
       }}
-
-      /* Force bright text just in the MAIN content area */
-      [data-testid="stAppViewContainer"] .main .block-container *,
-      [data-testid="stAppViewContainer"] [data-testid="block-container"] * {{
+      /* Make *everything* inside the main card bright + readable */
+      [data-testid="stAppViewContainer"] .main .block-container,
+      [data-testid="stAppViewContainer"] .main .block-container * {{
         color: {main_text} !important;
+        text-shadow: {text_shadow} !important;
       }}
 
-      /* Headings in main area */
+      /* Headings in main card */
       [data-testid="stAppViewContainer"] .main h1,
       [data-testid="stAppViewContainer"] .main h2,
       [data-testid="stAppViewContainer"] .main h3,
@@ -198,40 +76,78 @@ def force_main_readability(
       [data-testid="stAppViewContainer"] .main h5,
       [data-testid="stAppViewContainer"] .main h6 {{
         color: {main_text} !important;
+        text-shadow: {text_shadow} !important;
       }}
 
-      /* Links in main area */
+      /* Links in main card */
       [data-testid="stAppViewContainer"] .main a,
       [data-testid="stAppViewContainer"] .main a:visited {{
-        color: {link_text} !important;
+        color: {main_link} !important;
+        text-shadow: none !important; /* cleaner on links */
       }}
 
-      /* Keep alert boxes readable (they are light cards by default) */
-      [data-testid="stAppViewContainer"] .main .stAlert,
-      [data-testid="stAppViewContainer"] .main .stAlert * {{
-        color: #0f172a !important;    /* dark text */
-      }}
+      /* Alerts: keep them light for contrast, with dark text */
       [data-testid="stAppViewContainer"] .main .stAlert > div {{
         background: rgba(255,255,255,0.98) !important;
         border-radius: 10px !important;
       }}
+      [data-testid="stAppViewContainer"] .main .stAlert,
+      [data-testid="stAppViewContainer"] .main .stAlert * {{
+        color: #0f172a !important;
+        text-shadow: none !important;
+      }}
 
-      /* Tables on dark card */
+      /* Tables & metrics in main card */
       [data-testid="stAppViewContainer"] .main .stTable,
       [data-testid="stAppViewContainer"] .main .stTable * {{
         color: {main_text} !important;
+        text-shadow: {text_shadow} !important;
       }}
-
-      /* Metric text on dark card */
       [data-testid="stAppViewContainer"] .main [data-testid="stMetricValue"],
       [data-testid="stAppViewContainer"] .main [data-testid="stMetricLabel"],
       [data-testid="stAppViewContainer"] .main [data-testid="stMetricDelta"] * {{
         color: {main_text} !important;
+        text-shadow: {text_shadow} !important;
       }}
+
+      /* -------- Sidebar: light background + dark text -------- */
+      [data-testid="stSidebar"] > div:first-child {{
+        background: rgba(255,255,255,0.9) !important;
+      }}
+      [data-testid="stSidebar"] * {{
+        color: {sidebar_text} !important;
+        text-shadow: none !important;
+      }}
+
+      /* Inputs (main + sidebar) */
+      label, .stSelectbox label, .stNumberInput label, .stTextInput label {{
+        color: {sidebar_text} !important; /* labels on white controls */
+        text-shadow: none !important;
+      }}
+      input, textarea, select {{
+        color: {sidebar_text} !important;
+        border-color: {input_border} !important;
+      }}
+      [data-baseweb="select"] * {{ color: {sidebar_text} !important; }}
+      [data-baseweb="menu"] * {{ color: {sidebar_text} !important; }}
+      ::placeholder {{ color: {placeholder} !important; opacity: 1 !important; }}
+
+      /* Buttons */
+      div.stButton > button {{
+        background-color: {button_bg} !important;
+        color: {button_text} !important;
+        border: 1px solid {button_border} !important;
+        border-radius: 8px !important;
+        padding: 0.5rem 0.9rem !important;
+        font-weight: 600 !important;
+        box-shadow: 0 1px 2px rgba(16,24,40,0.07) !important;
+      }}
+      div.stButton > button:hover {{ filter: brightness(1.05) !important; }}
+      div.stButton > button:active {{ filter: brightness(0.95) !important; }}
     </style>
     """, unsafe_allow_html=True)
 
-    # Match Matplotlib text to the bright-on-dark main area
+    # Align Matplotlib with bright-on-dark main card
     mpl.rcParams.update({
         "text.color": main_text,
         "axes.labelcolor": main_text,
@@ -239,16 +155,18 @@ def force_main_readability(
         "ytick.color": main_text,
         "axes.edgecolor": main_text,
         "grid.color": "#9aa4b2",
-        "figure.facecolor": (0,0,0,0),   # transparent figure
-        "axes.facecolor": (0,0,0,0),     # we already provide a dark card
+        "figure.facecolor": (0,0,0,0),
+        "axes.facecolor": (0,0,0,0),
     })
 
-
-set_app_background("assets/app_image.jpg", blur_px=0, dim=0.45)
-apply_theme("light_on_dark")
-force_main_readability(card_bg="rgba(0,0,0,0.72)")
-# ------------------------------------------------------------------------------
-
+# ---- Call once, BEFORE rendering any content ----
+apply_sane_theme(
+    bg_image="assets/app_image.jpg",  # your background
+    bg_dim=0.5,                       # slightly stronger dark overlay
+    main_card_bg="rgba(0,0,0,0.78)",  # darker card = better contrast
+    main_text="#f8fafc",
+    main_link="#cfe4ff",
+)
 
 
 APP_TITLE = "Landfills Fire & Air Quality Monitor"
