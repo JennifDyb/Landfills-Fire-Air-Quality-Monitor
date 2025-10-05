@@ -135,7 +135,7 @@ elif page.lower() == "monitor":
     with info_col:
         st.caption(
             "On click, the app runs FIRMS check. If a fire is detected, it downloads data to get current AQI "
-            "and forecast AQI for next 72 hours (Pipelines 2–6)."
+            "and forecast AQI for next 72 hours."
         )
 
     if run_btn:
