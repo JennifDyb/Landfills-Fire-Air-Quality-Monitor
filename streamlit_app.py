@@ -12,13 +12,9 @@ import matplotlib as mpl
 # Import your core pipelines
 import landfill_pollution_detection_v2 as core
 
-# --- Background image helper (kept, small tweak to panel opacity) ---
-def set_app_background(image_path: str, blur_px: int = 0, dim: float = 0.0):
+def set_app_background(image_path: str, blur_px: int = 0, dim: float = 0.45):
     """
-    Sets a full-page background image using base64 CSS injection.
-    - image_path: path relative to the repo root (e.g., 'assets/app_bg.jpg')
-    - blur_px: optional CSS blur for readability (e.g., 2–6)
-    - dim: 0.0–1.0 overlay darkening for contrast (0 = none, 0.3 = subtle)
+    Full-page background with optional dark overlay (dim) and blur.
     """
     img_file = Path(image_path)
     if not img_file.exists():
@@ -28,93 +24,105 @@ def set_app_background(image_path: str, blur_px: int = 0, dim: float = 0.0):
     overlay = f"linear-gradient(rgba(0,0,0,{dim}), rgba(0,0,0,{dim})), " if dim > 0 else ""
     css = f"""
     <style>
-      /* Page background */
+      /* Background */
       [data-testid="stAppViewContainer"] {{
         background: {overlay} url("data:image/{img_file.suffix[1:]};base64,{b64}") center/cover no-repeat fixed;
         {'backdrop-filter: blur(' + str(blur_px) + 'px);' if blur_px > 0 else ''}
       }}
-      /* Transparent header */
+      /* Transparent top header */
       [data-testid="stHeader"] {{ background: rgba(0,0,0,0); }}
-      /* Main content card for readability */
-      .main .block-container {{
-        background: rgba(255,255,255,0.92);
-        border-radius: 12px;
-        padding: 1rem 1.25rem;
-      }}
-      /* Sidebar card */
+      /* Sidebar base (white card) */
       [data-testid="stSidebar"] > div:first-child {{
-        background: rgba(255,255,255,0.92);
+        background: rgba(255,255,255,0.96);
       }}
     </style>
     """
     st.markdown(css, unsafe_allow_html=True)
 
 
-# --- Unified readability CSS (no global * color rule) ---
-def apply_ui_readability(
-    main_text="#0f172a",           # dark text in main area
-    sidebar_text="#0f172a",        # dark text in sidebar
-    link_text="#2563eb",           # blue links
-    button_bg="#2563eb",           # primary button bg
-    button_text="#ffffff",         # primary button text
-    button_border="#1d4ed8",       # primary button border
-    input_border="#cbd5e1",        # input borders
-    placeholder="#64748b"          # placeholder text
-):
+def apply_theme(mode: str = "light_on_dark"):
+    """
+    Two-layer theme:
+      - MAIN AREA: light text on translucent dark card (for readability on image).
+      - SIDEBAR + FORM CONTROLS: dark-on-white (standard usability).
+      - Buttons: visible on any background.
+    """
+    if mode == "light_on_dark":
+        # Main content (over image)
+        main_text   = "#f8fafc"           # near-white
+        link_text   = "#cfe4ff"           # light link (accessible on dark)
+        card_bg     = "rgba(0,0,0,0.38)"  # translucent dark card for readability
+
+        # Sidebar and inputs (white backgrounds)
+        side_text   = "#0f172a"           # dark slate
+        input_border= "#cbd5e1"
+        placeholder = "#64748b"
+
+        # Buttons
+        button_bg   = "#2563eb"
+        button_text = "#ffffff"
+        button_brd  = "#1d4ed8"
+    else:
+        # Optional second mode (not used now)
+        main_text   = "#0f172a"
+        link_text   = "#2563eb"
+        card_bg     = "rgba(255,255,255,0.92)"
+        side_text   = "#0f172a"
+        input_border= "#cbd5e1"
+        placeholder = "#64748b"
+        button_bg   = "#2563eb"
+        button_text = "#ffffff"
+        button_brd  = "#1d4ed8"
+
     st.markdown(f"""
     <style>
-
-      /* ----------- MAIN AREA TEXT ----------- */
+      /* ---------- MAIN CONTENT: light text, dark translucent card ---------- */
+      .main .block-container {{
+        background: {card_bg};
+        border-radius: 12px;
+        padding: 1rem 1.25rem;
+      }}
       .main .block-container, .main .block-container * {{
         color: {main_text} !important;
       }}
+      a, a:visited {{ color: {link_text} !important; }}
 
-      /* ----------- SIDEBAR TEXT ----------- */
+      /* ---------- SIDEBAR: dark text on white ---------- */
       [data-testid="stSidebar"] * {{
-        color: {sidebar_text} !important;
+        color: {side_text} !important;
       }}
 
-      /* ----------- LINKS ----------- */
-      a, a:visited {{
-        color: {link_text} !important;
-      }}
-
-      /* ----------- INPUTS (selectbox, number_input, text_input, textarea) ----------- */
+      /* ---------- FORM CONTROLS (main + sidebar) use dark text on white ---------- */
       /* Labels */
       label, .stSelectbox label, .stNumberInput label, .stTextInput label {{
-        color: {main_text} !important;
+        color: {side_text} !important;
       }}
-
-      /* Native inputs */
+      /* Inputs proper */
       input, textarea, select {{
-        color: {main_text} !important;
+        color: {side_text} !important;
         background: #ffffff !important;
         border-color: {input_border} !important;
       }}
-
-      /* Streamlit BaseWeb select (dropdown trigger & value) */
-      [data-baseweb="select"] * {{
-        color: {main_text} !important;
-      }}
-      /* Dropdown menu panel + options */
-      [data-baseweb="menu"] {{
-        background: #ffffff !important;
-      }}
-      [data-baseweb="menu"] * {{
-        color: {main_text} !important;
-      }}
-
-      /* Placeholder */
       ::placeholder {{
         color: {placeholder} !important;
         opacity: 1 !important;
       }}
+      /* Streamlit BaseWeb select */
+      [data-baseweb="select"] * {{
+        color: {side_text} !important;  /* value + trigger text */
+      }}
+      [data-baseweb="menu"] {{
+        background: #ffffff !important; /* dropdown panel */
+      }}
+      [data-baseweb="menu"] * {{
+        color: {side_text} !important;  /* dropdown items */
+      }}
 
-      /* ----------- BUTTONS (all locations, including sidebar) ----------- */
+      /* ---------- Buttons everywhere ---------- */
       div.stButton > button {{
         background-color: {button_bg} !important;
         color: {button_text} !important;
-        border: 1px solid {button_border} !important;
+        border: 1px solid {button_brd} !important;
         border-radius: 8px !important;
         padding: 0.5rem 0.9rem !important;
         font-weight: 600 !important;
@@ -123,38 +131,38 @@ def apply_ui_readability(
       div.stButton > button:hover {{ filter: brightness(1.05) !important; }}
       div.stButton > button:active {{ filter: brightness(0.95) !important; }}
 
-      /* Metric text clarity */
+      /* ---------- Metrics readable on dark card ---------- */
       [data-testid="stMetricValue"],
       [data-testid="stMetricLabel"],
       [data-testid="stMetricDelta"] * {{
         color: {main_text} !important;
       }}
 
-      /* Tables */
+      /* ---------- Tables & expanders on dark card ---------- */
       .stTable, .stTable * {{ color: {main_text} !important; }}
+      details summary {{ color: {main_text} !important; }}
 
-      /* Expander titles */
-      details summary {{
-        color: {main_text} !important;
-      }}
-
+      /* ---------- Alerts keep good contrast on dark card ---------- */
+      .stAlert p, .stAlert div {{ color: #0f172a !important; }}  /* alert boxes are light by default */
     </style>
     """, unsafe_allow_html=True)
 
-    # Also align Matplotlib text with main text color
+    # Align Matplotlib text with MAIN area (light on dark)
     mpl.rcParams.update({
         "text.color": main_text,
         "axes.labelcolor": main_text,
         "xtick.color": main_text,
         "ytick.color": main_text,
-        "figure.facecolor": (1,1,1,0),
-        "axes.facecolor": (1,1,1,0.92)
+        "figure.facecolor": (0,0,0,0),   # transparent figure
+        "axes.facecolor": (0,0,0,0),     # we already give the page a dark card
+        "axes.edgecolor": main_text,
+        "grid.color": "#9aa4b2"
     })
 
-
-# --- Call these ONCE near the top of your app (after st.set_page_config) ---
 set_app_background("assets/app_image.jpg", blur_px=0, dim=0.45)
-apply_ui_readability()
+apply_theme("light_on_dark")
+# ------------------------------------------------------------------------------
+
 
 
 APP_TITLE = "Landfills Fire & Air Quality Monitor"
