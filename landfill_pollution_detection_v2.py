@@ -1484,113 +1484,127 @@ def _dynamic_feature_list(df: pd.DataFrame) -> list:
         if "rain" in df.columns: extra.append("rain")
     return base + extra
 
-def train_and_forecast_safe(
-    history_df,
-    fused_value,
-    current_meteo: dict,
-    horizon: int = 72,
-    features=("fused_AQI", "temp", "humidity", "wind_speed", "wind_deg", "pressure"),
-    min_rows: int = 24,
-):
+def train_and_forecast_with_confidence(history_df, current_meteo, fused_value, horizon=72):
     """
-    Train a LightGBM regressor to predict next-hour fused_AQI and produce a horizon-hour forecast.
-    Robust to missing/dirty data. Falls back to a naive persistence forecast on any failure.
+    Train LightGBM to predict next-hour fused AQI and produce a 72h forecast.
+    Always returns: (forecast_df, valid_rmse, confidence, fallback_reason)
 
-    Returns:
-        forecast_df (pd.DataFrame with ['datetime','pred_AQI']),
-        valid_rmse (float | None),
-        fallback_reason (str | None)  # None if LightGBM succeeded
+    confidence: 0.05–0.95 (higher = more confident). On fallback, we still return
+    a forecast (naive persistence) and a low confidence with a reason string.
     """
+    import numpy as np
+    import pandas as pd
 
-    def _naive_forecast(last_val, H):
-        v = float(last_val) if (last_val is not None and np.isfinite(last_val)) else 75.0
-        t0 = pd.Timestamp.utcnow()
-        return pd.DataFrame(
-            {"datetime": [t0 + pd.Timedelta(hours=h + 1) for h in range(H)],
-             "pred_AQI": [v] * H}
-        )
+    # Defaults in case we must fallback
+    def _naive_forecast():
+        base = float(fused_value) if fused_value is not None else float(history_df["fused_AQI"].iloc[-1])
+        rows = [{"datetime": datetime.utcnow() + timedelta(hours=i+1), "pred_AQI": base} for i in range(int(horizon))]
+        fdf = pd.DataFrame(rows)
+        return fdf
 
-    # 0) Guard: history present?
-    if history_df is None or len(history_df) == 0:
-        return _naive_forecast(fused_value, horizon), None, "history_df is empty"
+    # Ensure we have enough data
+    if history_df is None or not isinstance(history_df, pd.DataFrame) or history_df.empty:
+        return _naive_forecast(), None, 0.25, "No history; naive persistence forecast"
 
-    df = history_df.copy()
+    # Features we try to use (only those present will be used)
+    base_feats = ["fused_AQI", "temp", "humidity", "wind_speed", "wind_deg", "pressure"]
+    optional_feats = ["wind_gust", "rain"]
+    feats = [f for f in (base_feats + optional_feats) if f in history_df.columns]
 
-    # 1) Ensure required feature columns exist
-    for col in features:
-        if col not in df.columns:
-            df[col] = np.nan
+    if "fused_AQI" not in feats:
+        # Can't train without target history; fallback
+        return _naive_forecast(), None, 0.25, "Missing fused_AQI in history; naive persistence"
 
-    # 2) Coerce to numeric and clean NaNs/inf
-    for col in set(features) | {"fused_AQI"}:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-    df.replace([np.inf, -np.inf], np.nan, inplace=True)
+    # Coerce to numeric and clean dtypes
+    history_df = history_df.copy()
+    for col in feats + ["fused_AQI"]:
+        history_df[col] = pd.to_numeric(history_df[col], errors="coerce")
 
-    # 3) Build next-hour target and drop rows without complete data
-    df["target"] = df["fused_AQI"].shift(-1)
-    df = df.dropna(subset=list(features) + ["target"]).reset_index(drop=True)
+    # Build target = next-hour fused AQI
+    history_df["target"] = history_df["fused_AQI"].shift(-1)
+    history_df = history_df.dropna(subset=feats + ["target"]).reset_index(drop=True)
+    if history_df.empty:
+        return _naive_forecast(), None, 0.25, "Not enough clean rows after preprocessing"
 
-    if len(df) < min_rows:
-        return _naive_forecast(fused_value, horizon), None, f"too few training rows ({len(df)}) after cleaning"
+    X = history_df[feats]
+    y = history_df["target"]
 
-    # 4) Time-based split
-    split = int(len(df) * 0.8)
-    X_train, y_train = df.loc[:split - 1, list(features)], df.loc[:split - 1, "target"]
-    X_val,   y_val   = df.loc[split:,    list(features)], df.loc[split:,    "target"]
+    # Train/val split (time-based)
+    split = int(len(X) * 0.8)
+    if split < 10 or (len(X) - split) < 5:
+        return _naive_forecast(), None, 0.30, "Too few rows to train; naive persistence"
 
-    # Final sanity
-    if X_train.isna().any().any() or X_val.isna().any().any():
-        return _naive_forecast(fused_value, horizon), None, "NaNs remain after cleaning"
+    X_train, y_train = X.iloc[:split], y.iloc[:split]
+    X_val, y_val = X.iloc[split:], y.iloc[split:]
 
+    # Train LightGBM (robust to version differences)
     try:
         import lightgbm as lgb
+    except Exception:
+        return _naive_forecast(), None, 0.25, "LightGBM unavailable; naive persistence"
 
-        train_data = lgb.Dataset(X_train, label=y_train)
-        val_data   = lgb.Dataset(X_val,   label=y_val, reference=train_data)
+    train_data = lgb.Dataset(X_train, label=y_train)
+    val_data = lgb.Dataset(X_val, label=y_val, reference=train_data)
+    params = {"objective": "regression", "metric": "rmse", "verbosity": -1}
 
-        params = {"objective": "regression", "metric": "rmse", "verbosity": -1}
+    valid_rmse = None
+    try:
+        # Prefer callbacks API for early stopping (works across versions)
         callbacks = [
             lgb.early_stopping(stopping_rounds=20),
             lgb.log_evaluation(period=50),
         ]
-
         model = lgb.train(
             params,
             train_data,
             valid_sets=[val_data],
             num_boost_round=200,
-            callbacks=callbacks,
+            callbacks=callbacks
         )
-
-        # Extract RMSE safely
-        valid_rmse = None
-        try:
-            valid_rmse = model.best_score.get("valid_0", {}).get("rmse")
-        except Exception:
-            pass
-
-        # 5) Build current feature vector
-        cur_feats = {k: float(current_meteo.get(k, 0.0)) for k in features if k != "fused_AQI"}
-        cur_feats["fused_AQI"] = float(fused_value) if fused_value is not None else float(df["fused_AQI"].iloc[-1])
-
-        # 6) Forecast iteratively (autoregressive on fused_AQI)
-        out = []
-        t0 = pd.Timestamp.utcnow()
-        for h in range(horizon):
-            x_df = pd.DataFrame([cur_feats])[list(features)]
-            try:
-                pred = float(model.predict(x_df, num_iteration=getattr(model, "best_iteration", None))[0])
-            except Exception:
-                pred = float(model.predict(x_df)[0])
-            out.append({"datetime": t0 + pd.Timedelta(hours=h + 1), "pred_AQI": pred})
-            cur_feats["fused_AQI"] = pred  # autoregressive update
-
-        forecast_df = pd.DataFrame(out)
-        return forecast_df, valid_rmse, None
-
+        valid_rmse = float(model.best_score.get("valid_0", {}).get("rmse", np.nan))
+    except TypeError:
+        # Very old LightGBM versions may require the kwarg
+        model = lgb.train(
+            params,
+            train_data,
+            valid_sets=[val_data],
+            num_boost_round=200,
+            early_stopping_rounds=20
+        )
+        valid_rmse = float(model.best_score.get("valid_0", {}).get("rmse", np.nan))
     except Exception as e:
-        # LightGBM not installed, version issues, or runtime error
-        return _naive_forecast(fused_value, horizon), None, f"LightGBM error: {e.__class__.__name__}"
+        return _naive_forecast(), None, 0.25, f"Training failed: {e}"
+
+    # Build a single current feature row (fill missing from last history row)
+    last_row = history_df.iloc[-1]
+    cur = {"fused_AQI": float(fused_value) if fused_value is not None else float(last_row["fused_AQI"])}
+    for k in feats:
+        if k == "fused_AQI":
+            continue
+        # take live meteo if present, else last history
+        v_live = current_meteo.get(k) if isinstance(current_meteo, dict) else None
+        cur[k] = float(v_live) if v_live is not None and v_live == v_live else float(last_row.get(k, np.nan))
+    # Final safety coercion
+    cur_df = pd.DataFrame([cur])[feats].apply(pd.to_numeric, errors="coerce").fillna(method="ffill").fillna(method="bfill")
+
+    # Iterative forecast
+    out_rows = []
+    t0 = datetime.utcnow()
+    for h in range(int(horizon)):
+        pred = float(model.predict(cur_df, num_iteration=getattr(model, "best_iteration", None))[0])
+        out_rows.append({"datetime": t0 + timedelta(hours=h+1), "pred_AQI": pred})
+        cur_df = cur_df.copy()
+        cur_df.loc[:, "fused_AQI"] = pred
+
+    forecast_df = pd.DataFrame(out_rows)
+
+    # Map RMSE to a simple 0.05–0.95 confidence (heuristic)
+    if valid_rmse is None or np.isnan(valid_rmse):
+        confidence = 0.40
+    else:
+        confidence = float(np.clip(1.0 - (valid_rmse / 100.0), 0.05, 0.95))
+
+    return forecast_df, valid_rmse, confidence, None
 
 
 def run_workflow_if_fire(lat: float, lon: float,
@@ -1606,7 +1620,7 @@ def run_workflow_if_fire(lat: float, lon: float,
       2) Pipeline 2 (TEMPO) + 3 (Ground) in parallel (or sequential).
       3) Pipeline 4: build sat/ground/fused AQI.
       4) Pipeline 5: get current meteorology.
-      5) Pipeline 6: train and forecast.
+      5) Pipeline 6: train and forecast (with confidence).
     Returns a dict with all outputs.
     """
     # --- Pipeline 1: FIRMS ---
@@ -1618,8 +1632,7 @@ def run_workflow_if_fire(lat: float, lon: float,
         return {"fire_detected": False, "fires": fires}
 
     # --- Pipelines 2 & 3: in parallel (or sequential) ---
-    sat = {}
-    ground = {}
+    sat, ground = {}, {}
     if run_parallel:
         with ThreadPoolExecutor(max_workers=2) as pool:
             fut_sat = pool.submit(request_tempo_subset, lat, lon, tempo_days_back)
@@ -1643,16 +1656,17 @@ def run_workflow_if_fire(lat: float, lon: float,
             print("Pipeline 3 (Ground) error:", e)
 
     # --- Pipeline 4: AQIs ---
+    sat_aqi_value = sat_dom = ground_aqi_value = ground_dom = fused_value = None
+    sat_breakdown, ground_breakdown = {}, {}
     try:
         sat_hist = build_mock_sat_hist(list(sat.keys()), days=SAT_HIST_DAYS)
         sat_aqi_value, sat_dom, sat_breakdown = build_satellite_aqi(sat, sat_hist)
         ground_aqi_value, ground_dom, ground_breakdown = build_ground_aqi(ground)
-        fused_value = fused_aqi_from_components(sat_aqi_value, ground_aqi_value,
-                                                w_ground=FUSED_W_GROUND, w_sat=FUSED_W_SAT)
+        fused_value = fused_aqi_from_components(
+            sat_aqi_value, ground_aqi_value, w_ground=FUSED_W_GROUND, w_sat=FUSED_W_SAT
+        )
     except Exception as e:
         print("Pipeline 4 error:", e)
-        sat_aqi_value = sat_dom = ground_aqi_value = ground_dom = fused_value = None
-        sat_breakdown, ground_breakdown = {}, {}
 
     # --- Pipeline 5: current meteorology (OpenWeatherMap) ---
     try:
@@ -1661,36 +1675,34 @@ def run_workflow_if_fire(lat: float, lon: float,
         print("Pipeline 5 (meteo) error:", e)
         current_meteo = {"temp": np.nan, "humidity": np.nan, "wind_speed": np.nan,
                          "wind_gust": None, "wind_deg": np.nan, "pressure": np.nan, "rain": 0.0}
-        
-    # Ensure the keys trainer expects exist (safe defaults)
-    for k in ("temp", "humidity", "wind_speed", "wind_deg", "pressure"):
-        current_meteo.setdefault(k, 0.0)
 
-    # --- Pipeline 6: training/forecast (requires history_df) ---
-    try:
-        history_df = try_build_real_history(days=90)
-        if history_df is None or not isinstance(history_df, pd.DataFrame) or history_df.empty:
-            history_df = build_synthetic_history(days=90)
-    except Exception as e:
-        print("History build error; using synthetic:", e)
-        history_df = build_synthetic_history(days=90)
-
-    try:
-        forecast_df, metrics = train_and_forecast_safe(history_df, current_meteo, fused_value,
-                                               horizon=forecast_horizon_h)
-        valid_rmse = metrics.get("rmse")
-        confidence = metrics.get("confidence")
-        training_fallback_reason = metrics.get("fallback_reason")
-    except Exception as e:
-        print("Training error (unexpected); falling back to persistence:", e)
-        # Absolute safety fallback: persistence
-        t0 = pd.Timestamp.utcnow()
-        v = float(fused_value) if fused_value is not None else 75.0
-        forecast_df = pd.DataFrame({
-            "datetime": [t0 + pd.Timedelta(hours=h+1) for h in range(int(forecast_horizon_h))],
-            "pred_AQI": [v] * int(forecast_horizon_h)
-        })
-        valid_rmse, fallback_reason = None, "hard fallback: exception during training"
+    # --- Pipeline 6: training/forecast ---
+    forecast_df, valid_rmse, confidence, fallback_reason = pd.DataFrame(), None, None, None
+    if "history_df" in globals() and isinstance(history_df, pd.DataFrame) and not history_df.empty:
+        try:
+            forecast_df, valid_rmse, confidence, fallback_reason = train_and_forecast_with_confidence(
+                history_df, current_meteo, fused_value, horizon=forecast_horizon_h
+            )
+        except Exception as e:
+            print("Training/forecast error:", e)
+            # Fallback to naive forecast with low confidence
+            rows = [{"datetime": datetime.utcnow() + timedelta(hours=i+1),
+                     "pred_AQI": float(fused_value) if fused_value is not None else np.nan}
+                    for i in range(int(forecast_horizon_h))]
+            forecast_df = pd.DataFrame(rows)
+            valid_rmse = None
+            confidence = 0.25
+            fallback_reason = f"Exception in trainer: {e}"
+    else:
+        print("Skipping training: history_df is missing or empty.")
+        # Provide naive forecast so UI has something to plot
+        rows = [{"datetime": datetime.utcnow() + timedelta(hours=i+1),
+                 "pred_AQI": float(fused_value) if fused_value is not None else np.nan}
+                for i in range(int(forecast_horizon_h))]
+        forecast_df = pd.DataFrame(rows)
+        valid_rmse = None
+        confidence = 0.25
+        fallback_reason = "history_df missing or empty; naive persistence"
 
     return {
         "fire_detected": True,
@@ -1706,10 +1718,11 @@ def run_workflow_if_fire(lat: float, lon: float,
         "fused_aqi": fused_value,
         "current_meteo": current_meteo,
         "forecast_df": forecast_df,
-        "valid_rmse": valid_rmse,
-        "confidence_score": confidence,
+        "valid_rmse": valid_rmse,          
+        "confidence": confidence,          
         "training_fallback_reason": fallback_reason,
     }
+
 
 # ===== Hourly scheduler: check FIRMS and trigger pipelines =====
 
