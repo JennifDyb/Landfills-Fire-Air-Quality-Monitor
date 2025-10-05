@@ -1621,18 +1621,52 @@ def run_workflow_if_fire(lat: float, lon: float,
       3) Pipeline 4: build sat/ground/fused AQI.
       4) Pipeline 5: get current meteorology.
       5) Pipeline 6: train and forecast (with confidence).
-    Returns a dict with all outputs.
+    Returns a dict with all outputs. 'confidence' is ALWAYS present.
     """
+
+    # ---- Safe defaults so all locals exist no matter what happens later ----
+    sat = {}
+    ground = {}
+    sat_aqi_value = None
+    sat_dom = None
+    ground_aqi_value = None
+    ground_dom = None
+    fused_value = None
+    sat_breakdown, ground_breakdown = {}, {}
+    current_meteo = {"temp": np.nan, "humidity": np.nan, "wind_speed": np.nan,
+                     "wind_gust": None, "wind_deg": np.nan, "pressure": np.nan, "rain": 0.0}
+    forecast_df = pd.DataFrame()
+    valid_rmse = None
+    confidence = 0.25                 # <-- initialized here; adjusted after training if possible
+    fallback_reason = None
+
     # --- Pipeline 1: FIRMS ---
     fires = detect_fire_near_landfill(lat, lon, radius_km=radius_km)
     fire_yes = _fire_detected(fires, radius_km)
     print(f"FIRMS fire detected: {fire_yes}")
 
     if not fire_yes:
-        return {"fire_detected": False, "fires": fires}
+        # Include confidence and a stub forecast so the UI never breaks
+        return {
+            "fire_detected": False,
+            "fires": fires,
+            "satellite_current": sat,
+            "ground_current": ground,
+            "sat_aqi_value": sat_aqi_value,
+            "sat_dominant": sat_dom,
+            "sat_breakdown": sat_breakdown,
+            "ground_aqi_value": ground_aqi_value,
+            "ground_dominant": ground_dom,
+            "ground_breakdown": ground_breakdown,
+            "fused_aqi": fused_value,
+            "current_meteo": current_meteo,
+            "forecast_df": forecast_df,
+            "valid_rmse": valid_rmse,
+            "confidence": None,               # no forecast, so no confidence
+            "training_fallback_reason": None,
+        }
 
     # --- Pipelines 2 & 3: in parallel (or sequential) ---
-    sat, ground = {}, {}
     if run_parallel:
         with ThreadPoolExecutor(max_workers=2) as pool:
             fut_sat = pool.submit(request_tempo_subset, lat, lon, tempo_days_back)
@@ -1656,8 +1690,6 @@ def run_workflow_if_fire(lat: float, lon: float,
             print("Pipeline 3 (Ground) error:", e)
 
     # --- Pipeline 4: AQIs ---
-    sat_aqi_value = sat_dom = ground_aqi_value = ground_dom = fused_value = None
-    sat_breakdown, ground_breakdown = {}, {}
     try:
         sat_hist = build_mock_sat_hist(list(sat.keys()), days=SAT_HIST_DAYS)
         sat_aqi_value, sat_dom, sat_breakdown = build_satellite_aqi(sat, sat_hist)
@@ -1673,36 +1705,33 @@ def run_workflow_if_fire(lat: float, lon: float,
         current_meteo = get_current_meteorology(lat, lon)
     except Exception as e:
         print("Pipeline 5 (meteo) error:", e)
-        current_meteo = {"temp": np.nan, "humidity": np.nan, "wind_speed": np.nan,
-                         "wind_gust": None, "wind_deg": np.nan, "pressure": np.nan, "rain": 0.0}
+        # keep the safe default 'current_meteo' already set above
 
-    # --- Pipeline 6: training/forecast ---
-    forecast_df, valid_rmse, confidence, fallback_reason = pd.DataFrame(), None, None, None
-    if "history_df" in globals() and isinstance(history_df, pd.DataFrame) and not history_df.empty:
-        try:
+    # --- Pipeline 6: training/forecast (always produce forecast + confidence) ---
+    try:
+        if "history_df" in globals() and isinstance(history_df, pd.DataFrame) and not history_df.empty:
             forecast_df, valid_rmse, confidence, fallback_reason = train_and_forecast_with_confidence(
                 history_df, current_meteo, fused_value, horizon=forecast_horizon_h
             )
-        except Exception as e:
-            print("Training/forecast error:", e)
-            # Fallback to naive forecast with low confidence
+        else:
+            print("Skipping training: history_df is missing or empty.")
+            # Provide naive forecast so UI has something to plot; keep low confidence
             rows = [{"datetime": datetime.utcnow() + timedelta(hours=i+1),
                      "pred_AQI": float(fused_value) if fused_value is not None else np.nan}
                     for i in range(int(forecast_horizon_h))]
             forecast_df = pd.DataFrame(rows)
             valid_rmse = None
             confidence = 0.25
-            fallback_reason = f"Exception in trainer: {e}"
-    else:
-        print("Skipping training: history_df is missing or empty.")
-        # Provide naive forecast so UI has something to plot
+            fallback_reason = "history_df missing or empty; naive persistence"
+    except Exception as e:
+        print("Training/forecast error:", e)
         rows = [{"datetime": datetime.utcnow() + timedelta(hours=i+1),
                  "pred_AQI": float(fused_value) if fused_value is not None else np.nan}
                 for i in range(int(forecast_horizon_h))]
         forecast_df = pd.DataFrame(rows)
         valid_rmse = None
         confidence = 0.25
-        fallback_reason = "history_df missing or empty; naive persistence"
+        fallback_reason = f"Exception in trainer: {e}"
 
     return {
         "fire_detected": True,
@@ -1718,11 +1747,10 @@ def run_workflow_if_fire(lat: float, lon: float,
         "fused_aqi": fused_value,
         "current_meteo": current_meteo,
         "forecast_df": forecast_df,
-        "valid_rmse": valid_rmse,          
-        "confidence": confidence,          
+        "valid_rmse": valid_rmse,
+        "confidence": confidence,                # <-- ALWAYS DEFINED
         "training_fallback_reason": fallback_reason,
     }
-
 
 # ===== Hourly scheduler: check FIRMS and trigger pipelines =====
 
