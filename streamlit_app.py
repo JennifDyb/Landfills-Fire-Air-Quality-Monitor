@@ -102,6 +102,103 @@ def enforce_text_color(color="#0f172a", link_color="#2563eb", sidebar_color=None
 set_app_background("assets/app_image.jpg", blur_px=0, dim=0.45)
 enforce_text_color("#f8fafc", link_color="#93c5fd")  # light text
 
+# --- Make UI readable over a light/white sidebar & inputs ---
+def apply_ui_readability(
+    base_text="#0f172a",           # dark slate for text
+    link_text="#2563eb",           # link blue
+    button_bg="#2563eb",           # primary button background
+    button_text="#ffffff",         # primary button text
+    button_border="#1d4ed8",       # primary button border
+    input_border="#cbd5e1",        # light slate border for inputs
+    placeholder="#64748b"          # placeholder color
+):
+    st.markdown(f"""
+    <style>
+      /* ---------- Sidebar: force dark text on white bg ---------- */
+      [data-testid="stSidebar"] * {{
+        color: {base_text} !important;
+      }}
+
+      /* Sidebar headings/expanders */
+      [data-testid="stSidebar"] h1, 
+      [data-testid="stSidebar"] h2, 
+      [data-testid="stSidebar"] h3, 
+      [data-testid="stSidebar"] h4, 
+      [data-testid="stSidebar"] h5, 
+      [data-testid="stSidebar"] h6,
+      [data-testid="stSidebar"] label,
+      [data-testid="stSidebar"] p,
+      [data-testid="stSidebar"] span {{
+        color: {base_text} !important;
+      }}
+
+      /* ---------- Inputs: selectbox / number_input / text inputs --- */
+      /* Labels */
+      label, .stSelectbox label, .stNumberInput label, .stTextInput label {{
+        color: {base_text} !important;
+      }}
+
+      /* Native inputs */
+      input, textarea, select {{
+        color: {base_text} !important;
+        border-color: {input_border} !important;
+      }}
+
+      /* Streamlit's selectbox uses BaseWeb select */
+      [data-baseweb="select"] * {{
+        color: {base_text} !important;
+      }}
+      /* Dropdown menu items for select */
+      [data-baseweb="menu"] * {{
+        color: {base_text} !important;
+      }}
+      /* Placeholder text */
+      ::placeholder {{
+        color: {placeholder} !important;
+        opacity: 1 !important;
+      }}
+
+      /* ---------- Buttons: make them visible and consistent ---------- */
+      div.stButton > button {{
+        background-color: {button_bg} !important;
+        color: {button_text} !important;
+        border: 1px solid {button_border} !important;
+        border-radius: 8px !important;
+        padding: 0.5rem 0.9rem !important;
+        font-weight: 600 !important;
+        box-shadow: 0 1px 2px rgba(16,24,40,0.07) !important;
+      }}
+      div.stButton > button:hover {{
+        filter: brightness(1.05) !important;
+      }}
+      div.stButton > button:active {{
+        filter: brightness(0.95) !important;
+      }}
+
+      /* Link color globally */
+      a, a:visited {{ color: {link_text} !important; }}
+
+      /* Metrics (numbers and labels) */
+      [data-testid="stMetricValue"],
+      [data-testid="stMetricLabel"],
+      [data-testid="stMetricDelta"] * {{
+        color: {base_text} !important;
+      }}
+
+      /* Expander titles */
+      details summary {{
+        color: {base_text} !important;
+      }}
+
+      /* Table text */
+      .stTable, .stTable * {{ color: {base_text} !important; }}
+
+    </style>
+    """, unsafe_allow_html=True)
+
+apply_ui_readability()
+
+
 APP_TITLE = "Landfills Fire & Air Quality Monitor"
 APP_PURPOSE = (
     "Watches for landfills' fires (NASA FIRMS). "
