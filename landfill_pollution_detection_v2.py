@@ -35,6 +35,7 @@ from shapely.geometry import Point
 from scipy import stats
 from concurrent.futures import ThreadPoolExecutor
 import streamlit as st
+from sklearn.metrics import mean_squared_error
 
 # Harmony
 from harmony import BBox, Client, Collection, Request
@@ -954,7 +955,7 @@ def get_ground_measurements(lat: float, lon: float) -> dict:
     2) If PM2.5 missing, fill from PurpleAir
     3) If still empty, return MOCK_GROUND
     """
-    
+
     # 1) OpenAQ v3 (converted to TARGET_UNITS)
     vals = get_openaq_latest_v3(lat, lon)
 
@@ -1328,80 +1329,122 @@ if "rain" in history_df.columns:      extra_features.append("rain")
 features = base_features + extra_features
 
 # 3) Train LightGBM (autoregressive: predict fused_AQI at t+1)
-try:
-    import lightgbm as lgb
+def train_and_forecast_safe(history_df: pd.DataFrame,
+                            current_meteo: dict,
+                            fused_value: float | None,
+                            horizon: int = 72,
+                            features=("fused_AQI","temp","humidity","wind_speed","wind_deg","pressure","rain","wind_gust"),
+                            verbose: bool = False):
+    """
+    - Trains LightGBM to predict next-hour fused_AQI.
+    - Computes a confidence score vs a naive baseline (last value persistence).
+      confidence = clamp(50 + 50 * (baseline_rmse - model_rmse) / baseline_rmse, 0, 100)
+    - Returns (forecast_df, metrics_dict) where metrics_dict has 'confidence', 'rmse', 'baseline_rmse'.
+    - On any failure, returns (empty_df, {'confidence': None, 'rmse': None, 'baseline_rmse': None, 'fallback_reason': ...})
+    """
+    try:
+        df = history_df.copy()
+        if df.empty or "fused_AQI" not in df.columns:
+            return pd.DataFrame(), {"confidence": None, "rmse": None, "baseline_rmse": None,
+                                    "fallback_reason": "history_df missing or empty"}
 
-    df = history_df.copy().reset_index(drop=True)
-    if "fused_AQI" not in df.columns:
-        raise ValueError("history_df must contain 'fused_AQI'.")
+        # Target = next-hour fused AQI
+        df = df.reset_index(drop=True)
+        df["target"] = df["fused_AQI"].shift(-1)
+        df = df.dropna().reset_index(drop=True)
 
-    # Create next-hour target
-    df["target"] = df["fused_AQI"].shift(-1)
-    df = df.dropna(subset=["target"]).reset_index(drop=True)
+        # Ensure numeric dtypes for model features (coerce errors to NaN, then fill with medians)
+        X = df[list(features)].apply(pd.to_numeric, errors="coerce")
+        X = X.fillna(X.median(numeric_only=True))
+        y = pd.to_numeric(df["target"], errors="coerce").fillna(method="ffill").fillna(method="bfill")
 
-    # Ensure feature/target dtypes are numeric floats
-    for col in features + ["target"]:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
+        # Time-based split
+        split = int(len(X) * 0.8)
+        if split < 10 or (len(X) - split) < 5:
+            return pd.DataFrame(), {"confidence": None, "rmse": None, "baseline_rmse": None,
+                                    "fallback_reason": "not enough samples to split"}
 
-    # Build matrices
-    X = df[features].astype(np.float32)
-    y = df["target"].astype(np.float32)
+        X_train, y_train = X.iloc[:split], y.iloc[:split]
+        X_val,   y_val   = X.iloc[split:], y.iloc[split:]
 
-    # Simple time-based split
-    split = max(1, int(len(X) * 0.8))
-    X_train, y_train = X.iloc[:split], y.iloc[:split]
-    X_val,   y_val   = X.iloc[split:], y.iloc[split:]
+        train_data = lgb.Dataset(X_train, label=y_train)
+        val_data   = lgb.Dataset(X_val, label=y_val, reference=train_data)
 
-    train_data = lgb.Dataset(X_train, label=y_train)
-    val_data   = lgb.Dataset(X_val, label=y_val, reference=train_data)
+        params = {"objective": "regression", "metric": "rmse", "verbosity": -1}
+        callbacks = [
+            lgb.early_stopping(stopping_rounds=20),
+            lgb.log_evaluation(period=50 if verbose else 0),
+        ]
 
-    params = {"objective": "regression", "metric": "rmse", "verbosity": -1}
-    callbacks = [
-        lgb.early_stopping(stopping_rounds=20, verbose=False),
-        # lgb.log_evaluation(period=50),  # uncomment for periodic logs
-    ]
+        model = lgb.train(params, train_data,
+                          valid_sets=[val_data],
+                          num_boost_round=200,
+                          callbacks=callbacks)
 
-    model = lgb.train(params, train_data, valid_sets=[val_data], num_boost_round=200, callbacks=callbacks)
-    valid_rmse = model.best_score.get("valid_0", {}).get("rmse")
-    print("Model trained. Valid RMSE:", valid_rmse)
+        # Validation RMSE (model)
+        y_val_pred = model.predict(X_val, num_iteration=model.best_iteration)
+        model_rmse = float(np.sqrt(mean_squared_error(y_val, y_val_pred)))
 
-    # 4) Forecast next 72 hours (autoregressive)
-    horizon = 72
+        # Baseline: persistence (predict next-hour = current fused_AQI)
+        # Align baseline for the same validation indices
+        baseline_pred = df["fused_AQI"].shift(1).iloc[split:]  # previous hour as prediction
+        baseline_true = df["target"].iloc[split:]
+        # Drop any NA alignment artifacts
+        mask = (~baseline_pred.isna()) & (~baseline_true.isna())
+        if mask.sum() == 0:
+            baseline_rmse = None
+        else:
+            baseline_rmse = float(np.sqrt(mean_squared_error(baseline_true[mask], baseline_pred[mask])))
 
-    # Pull fused_value/current_meteo from globals if available; otherwise fall back
-    fused_value = globals().get("fused_value", float(df["fused_AQI"].iloc[-1]))
-    current_meteo = globals().get("current_meteo", {})
+        # Confidence score 0–100
+        if baseline_rmse is None or baseline_rmse == 0:
+            confidence = None
+        else:
+            raw = 50.0 + 50.0 * (baseline_rmse - model_rmse) / baseline_rmse
+            confidence = float(max(0.0, min(100.0, raw)))
 
-    # Build current feature vector (numeric); keep meteo constant over horizon for this simple demo
-    def _fv_get(name, default=np.nan):
-        if name == "fused_AQI":
-            return _to_float(fused_value, default)
-        # prefer current meteo, else last historical value
-        if name in current_meteo:
-            return _to_float(current_meteo.get(name), default)
-        if name in df.columns:
-            return _to_float(df[name].iloc[-1], default)
-        return default
+        # --- Forecast next `horizon` hours (autoregressive on fused_AQI only) ---
+        cur = {
+            "fused_AQI": float(fused_value if fused_value is not None else df["fused_AQI"].iloc[-1]),
+            "temp": float(current_meteo.get("temp", np.nan)),
+            "humidity": float(current_meteo.get("humidity", np.nan)),
+            "wind_speed": float(current_meteo.get("wind_speed", np.nan)),
+            "wind_deg": float(current_meteo.get("wind_deg", np.nan)),
+            "pressure": float(current_meteo.get("pressure", np.nan)),
+            "rain": float(current_meteo.get("rain", 0.0)),
+            "wind_gust": float(current_meteo.get("wind_gust", np.nan)),
+        }
 
-    cur_feats = {f: _fv_get(f) for f in features}
+        # Ensure order and fill missing feature keys
+        for f in features:
+            if f not in cur:
+                cur[f] = float("nan")
 
-    # Helper to build numeric single-row DF with exact column order
-    def _num_row_dict(d, cols):
-        row = {c: _to_float(d.get(c), np.nan) for c in cols}
-        return pd.DataFrame([row], columns=cols).astype(np.float32)
+        preds = []
+        t0 = datetime.utcnow()
+        for h in range(horizon):
+            x_row = pd.DataFrame([cur])[list(features)]
+            x_row = x_row.apply(pd.to_numeric, errors="coerce").fillna(X.median(numeric_only=True))
+            p = float(model.predict(x_row, num_iteration=model.best_iteration)[0])
+            preds.append({"datetime": t0 + timedelta(hours=h+1), "pred_AQI": p})
+            cur["fused_AQI"] = p  # autoreg
 
-    now = datetime.utcnow()
-    rows = []
-    for h in range(horizon):
-        x_df = _num_row_dict(cur_feats, features)
-        pred = float(model.predict(x_df, num_iteration=model.best_iteration)[0])
-        rows.append({"datetime": now + timedelta(hours=h + 1), "pred_AQI": pred})
-        cur_feats["fused_AQI"] = pred  # autoregressive feedback
+        forecast_df = pd.DataFrame(preds)
 
-    forecast_df = pd.DataFrame(rows)
+        metrics = {
+            "confidence": confidence,
+            "rmse": model_rmse,
+            "baseline_rmse": baseline_rmse,
+            "fallback_reason": None
+        }
+        return forecast_df, metrics
 
-    # 5) Plot forecast
+    except Exception as e:
+        if verbose:
+            print("Training error:", e)
+        return pd.DataFrame(), {"confidence": None, "rmse": None, "baseline_rmse": None,
+                                "fallback_reason": f"training failed: {e}"}
+    # 4) Plot forecast
     plt.figure(figsize=(12, 5))
     plt.plot(forecast_df["datetime"], forecast_df["pred_AQI"], label="Predicted fused AQI")
     plt.axhline(50,  color="green",  linestyle="--", label="Good threshold")
