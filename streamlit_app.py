@@ -303,8 +303,8 @@ elif page.lower() == "results":
                 new_qp["page"] = "Monitor"
                 st.query_params = new_qp
                 st.rerun()
-        with col_b:
-            st.markdown("Or click this link: [Open Monitor](?page=Monitor)")
+        #with col_b:
+        #    st.markdown("Or click this link: [Open Monitor](?page=Monitor)")
 
     else:
         if not lr.get("fire_detected"):
