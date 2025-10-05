@@ -200,10 +200,10 @@ TEMPO_CMR_IDS = {
 
 # Mock fallback (roughly realistic magnitudes)
 MOCK_TEMPO = {
-    "NO2":  2.0e15,   # molec/cm^2
-    "O3":   1.0e18,   # molec/cm^2 (trop)
-    "HCHO": 5.0e15,   # molec/cm^2
-    "AER":  1.0,      # UVAI (unitless)
+    "NO2":  5.0e14, # molec/cm^2
+    "O3":   6.0e17, # molec/cm^2 (trop)
+    "HCHO": 1.5e15, # molec/cm^2
+    "AER":  0.3, # UVAI (unitless)
 }
 
 # === Helpers ===
@@ -957,6 +957,8 @@ def build_mock_sat_hist(satellite_keys, days=SAT_HIST_DAYS):
         "HCHO": 5e15,  # total column
         "AER":  1.0,   # UVAI typical range
     }
+
+
     hist = {}
     for k in satellite_keys:
         if k == "AER":
