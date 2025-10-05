@@ -365,7 +365,7 @@ elif page.lower() == "results":
 
                 # Ground (OpenAQ / PurpleAir fallback): always show all six
                 ground_expected = [
-                    ("PM2.5 (µg/m³)", ground_current.get("PM25"), "µg/m³"),
+                    ("PM2.5 (µg/m³)", ground_current.get("PM2.5"), "µg/m³"),
                     ("PM10 (µg/m³)",  ground_current.get("PM10"), "µg/m³"),
                     ("NO₂ (ppb)",     ground_current.get("NO2"),  "ppb"),
                     ("O₃ (ppb)",      ground_current.get("O3"),   "ppb"),
@@ -381,7 +381,7 @@ elif page.lower() == "results":
                     render_cards("Satellite AQI sub-indices", s_items, cols=3)
 
                 if isinstance(ground_breakdown, dict) and ground_breakdown:
-                    display_order = ["PM25", "PM10", "NO2", "O3", "CO", "SO2"]
+                    display_order = ["PM2.5", "PM10", "NO2", "O3", "CO", "SO2"]
                     g_items = []
                     for pol in display_order:
                         sub = ground_breakdown.get(pol, {})
