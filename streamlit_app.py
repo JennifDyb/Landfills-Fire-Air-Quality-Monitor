@@ -118,9 +118,25 @@ elif page.lower() == "monitor":
     #demo_lat = core.LANDFILL.get("lat", 34.1439)
     #demo_lon = core.LANDFILL.get("lon", -118.6615)
 
-    choice = st.selectbox("Choose landfill", available_landfills(), index=available_landfills().index("Calabasas Landfill"))
-    lanfill = set_landfill_by_name(choice)
-    st.caption(f"Selected: {lanfill['name']} ({lanfill['city']}) — lat {lanfill['lat']:.5f}, lon {lanfill['lon']:.5f}")
+    # --- Landfill selection (dropdown) ---
+    from core import available_landfills, get_landfill  # adjust import path if needed
+
+    names = available_landfills()
+    default_idx = names.index("Calabasas Landfill") if "Calabasas Landfill" in names else 0
+    selected_name = st.selectbox("Choose landfill", options=names, index=default_idx)
+
+    lf = get_landfill(selected_name)
+    lat, lon = float(lf["lat"]), float(lf["lon"])
+
+    # Show coords + optional radius
+    c1, c2, c3 = st.columns([1, 1, 1])
+    with c1:
+        st.metric("Latitude", f"{lat:.6f}")
+    with c2:
+        st.metric("Longitude", f"{lon:.6f}")
+    with c3:
+        radius_km = st.slider("Detection radius (km)", min_value=1, max_value=20, value=5, step=1)
+
 
     col1, col2, col3 = st.columns([1,1,1])
     with col1:

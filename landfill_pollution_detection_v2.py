@@ -89,7 +89,7 @@ LANDFILLS = {
     },
 }
 
-# Default selection (keep your previous behavior)
+# Default selection
 LANDFILL = LANDFILLS["Calabasas Landfill"]
 
 def set_landfill_by_name(name: str):
@@ -102,10 +102,6 @@ def set_landfill_by_name(name: str):
 def available_landfills():
     """Convenience: list of names for UI pickers."""
     return list(LANDFILLS.keys())
-
-
-
-
 
 # Environment variables
 #load_dotenv()
