@@ -1,39 +1,41 @@
 # Use of AI for code review
 
 # streamlit_app.py
-# -------------------------------------------------------------------
-# Landfills Fire & Air Quality Monitor (Streamlit app)
-# -------------------------------------------------------------------
-
 import os
-import math
 from datetime import datetime
-from pathlib import Path
-import base64
-
 import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib as mpl
 import streamlit as st
+import matplotlib.pyplot as plt
+import math
+import base64
+from pathlib import Path
+import matplotlib as mpl
 
-# Page config MUST be set before any other st.* calls
-st.set_page_config(page_title="Landfills Fire & Air Quality Monitor", page_icon="🔥", layout="wide")
-
-# Import your core pipelines AFTER page config
+# Import your core pipelines
 import landfill_pollution_detection_v2 as core
 
+# ---------- Layout ----------
+st.set_page_config(page_title=APP_TITLE, page_icon="🔥", layout="wide")
+page_key = _get_query_page("home")
+valid_keys = ["home", "monitor", "results"]
+try:
+    idx = valid_keys.index(page_key)
+except ValueError:
+    idx = 0
+page = st.sidebar.radio("Pages", ["Home", "Monitor", "Results"], index=idx)
 
-# -------------------------------------------------------------------
-# THEME & STYLES
-# -------------------------------------------------------------------
+st.title(APP_TITLE)
+
+# ----------------------------------
+
 def apply_sane_theme(
     bg_image="assets/app_image.jpg",
-    bg_dim=0.5,                    # dark overlay over background image
-    main_card_bg="rgba(0,0,0,0.78)",   # dark translucent main card
-    main_text="#f8fafc",           # near-white text in main card
+    bg_dim=0.45,                 # dark overlay on image
+    main_card_bg="rgba(0,0,0,0.78)",  # darker translucent card
+    main_text="#f8fafc",         # near-white
     main_link="#cfe4ff",
-    text_shadow="0 1px 2px rgba(0,0,0,.75)",  # subtle halo on dark bg
-    sidebar_text="#0f172a",        # dark text (sidebar is light)
+    text_shadow="0 1px 2px rgba(0,0,0,.75)",  # subtle halo for readability
+    sidebar_text="#0f172a",      # dark text (sidebar is light)
     button_bg="#2563eb",
     button_text="#ffffff",
     button_border="#1d4ed8",
@@ -59,63 +61,65 @@ def apply_sane_theme(
       /* Background (with optional overlay) */
       {css_bg}
 
-      /* Transparent top header */
-      [data-testid="stHeader"] {{
-        background: rgba(0,0,0,0) !important;
-      }}
+      /* Header transparent */
+      [data-testid="stHeader"] {{ background: rgba(0,0,0,0) !important; }}
 
-      /* -------- Main content card -------- */
-      /* Target the central container */
+      /* -------- Main content: stronger dark card + bright text + text shadow -------- */
       [data-testid="stAppViewContainer"] .main .block-container {{
         background: {main_card_bg} !important;
         border-radius: 12px !important;
         padding: 1rem 1.25rem !important;
       }}
-
-      /* Make virtually everything INSIDE the main card bright & readable */
-      [data-testid="stAppViewContainer"] .main .block-container :is(
-        p, li, span, div, code, kbd, strong, em, small, pre, table, th, td
-      ) {{
+      /* Make *everything* inside the main card bright + readable */
+      [data-testid="stAppViewContainer"] .main .block-container,
+      [data-testid="stAppViewContainer"] .main .block-container * {{
         color: {main_text} !important;
         text-shadow: {text_shadow} !important;
       }}
-      [data-testid="stAppViewContainer"] .main .block-container :is(h1,h2,h3,h4,h5,h6) {{
+
+      /* Headings in main card */
+      [data-testid="stAppViewContainer"] .main h1,
+      [data-testid="stAppViewContainer"] .main h2,
+      [data-testid="stAppViewContainer"] .main h3,
+      [data-testid="stAppViewContainer"] .main h4,
+      [data-testid="stAppViewContainer"] .main h5,
+      [data-testid="stAppViewContainer"] .main h6 {{
         color: {main_text} !important;
         text-shadow: {text_shadow} !important;
       }}
 
       /* Links in main card */
-      [data-testid="stAppViewContainer"] .main .block-container a,
-      [data-testid="stAppViewContainer"] .main .block-container a:visited {{
+      [data-testid="stAppViewContainer"] .main a,
+      [data-testid="stAppViewContainer"] .main a:visited {{
         color: {main_link} !important;
-        text-shadow: none !important;
+        text-shadow: none !important; /* cleaner on links */
       }}
 
-      /* Alerts in main card: keep light background with dark text for clarity */
-      [data-testid="stAppViewContainer"] .main .block-container .stAlert > div {{
+      /* Alerts: keep them light for contrast, with dark text */
+      [data-testid="stAppViewContainer"] .main .stAlert > div {{
         background: rgba(255,255,255,0.98) !important;
         border-radius: 10px !important;
       }}
-      [data-testid="stAppViewContainer"] .main .block-container .stAlert,
-      [data-testid="stAppViewContainer"] .main .block-container .stAlert * {{
+      [data-testid="stAppViewContainer"] .main .stAlert,
+      [data-testid="stAppViewContainer"] .main .stAlert * {{
         color: #0f172a !important;
         text-shadow: none !important;
       }}
 
-      /* Metrics & tables in main card */
-      [data-testid="stAppViewContainer"] .main .block-container [data-testid="stMetricValue"],
-      [data-testid="stAppViewContainer"] .main .block-container [data-testid="stMetricLabel"],
-      [data-testid="stAppViewContainer"] .main .block-container [data-testid="stMetricDelta"] * {{
+      /* Tables & metrics in main card */
+      [data-testid="stAppViewContainer"] .main .stTable,
+      [data-testid="stAppViewContainer"] .main .stTable * {{
         color: {main_text} !important;
         text-shadow: {text_shadow} !important;
       }}
-      [data-testid="stAppViewContainer"] .main .block-container .stTable,
-      [data-testid="stAppViewContainer"] .main .block-container .stTable * {{
+      [data-testid="stAppViewContainer"] .main [data-testid="stMetricValue"],
+      [data-testid="stAppViewContainer"] .main [data-testid="stMetricLabel"],
+      [data-testid="stAppViewContainer"] .main [data-testid="stMetricDelta"] * {{
         color: {main_text} !important;
         text-shadow: {text_shadow} !important;
       }}
 
-      /* -------- Sidebar stays light with dark text -------- */
+      /* -------- Sidebar: light background + dark text -------- */
       [data-testid="stSidebar"] > div:first-child {{
         background: rgba(255,255,255,0.9) !important;
       }}
@@ -124,14 +128,11 @@ def apply_sane_theme(
         text-shadow: none !important;
       }}
 
-      /* -------- Inputs (main + sidebar): dark text on white widgets -------- */
-      /* Scoped to Streamlit input wrappers instead of global <label> */
-      .stNumberInput label,
-      .stTextInput label,
-      .stSelectbox label,
-      .stSlider label,
-      .stDateInput label {{ color: {sidebar_text} !important; text-shadow: none !important; }}
-
+      /* Inputs (main + sidebar) */
+      label, .stSelectbox label, .stNumberInput label, .stTextInput label {{
+        color: {sidebar_text} !important; /* labels on white controls */
+        text-shadow: none !important;
+      }}
       input, textarea, select {{
         color: {sidebar_text} !important;
         border-color: {input_border} !important;
@@ -140,7 +141,7 @@ def apply_sane_theme(
       [data-baseweb="menu"] * {{ color: {sidebar_text} !important; }}
       ::placeholder {{ color: {placeholder} !important; opacity: 1 !important; }}
 
-      /* Buttons (both places) */
+      /* Buttons */
       div.stButton > button {{
         background-color: {button_bg} !important;
         color: {button_text} !important;
@@ -167,20 +168,16 @@ def apply_sane_theme(
         "axes.facecolor": (0,0,0,0),
     })
 
-
-# Call once, BEFORE rendering any content
+# ---- Call once, BEFORE rendering any content ----
 apply_sane_theme(
-    bg_image="assets/app_image.jpg",
-    bg_dim=0.5,
-    main_card_bg="rgba(0,0,0,0.78)",
+    bg_image="assets/app_image.jpg",  # your background
+    bg_dim=0.5,                       # slightly stronger dark overlay
+    main_card_bg="rgba(0,0,0,0.78)",  # darker card = better contrast
     main_text="#f8fafc",
     main_link="#cfe4ff",
 )
 
 
-# -------------------------------------------------------------------
-# APP TEXT
-# -------------------------------------------------------------------
 APP_TITLE = "Landfills Fire & Air Quality Monitor"
 APP_PURPOSE = (
     "Watches for landfills' fires (NASA FIRMS). "
@@ -190,6 +187,7 @@ APP_PURPOSE = (
 )
 
 # ---------- Helpers ----------
+
 def _fmt_value(val, unit=None, digits=2):
     """Return a friendly string or 'Could not get measurement' for missing values."""
     if val is None:
@@ -214,3 +212,369 @@ def render_cards(title, items, cols=3):
         cols_row = st.columns(cols)
         for c in range(cols):
             idx = r * cols + c
+            if idx >= len(items): 
+                continue
+            label, val = items[idx]
+            with cols_row[c]:
+                st.markdown(
+                    f"""
+                    <div style="border:1px solid rgba(200,200,200,.4); border-radius:10px; padding:.6rem .8rem; margin-bottom:.5rem;">
+                        <div style="font-size:.85rem; color:#666;">{label}</div>
+                        <div style="font-size:1.1rem; font-weight:600;">{val}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+def _get_query_page(default="home"):
+    qp = st.query_params
+    return (qp.get("page", default) or default).lower()
+
+def _nav(page_name: str):
+    st.query_params["page"] = page_name.lower()
+    st.rerun()
+
+def _format_latlon(lat, lon):
+    try:
+        return f"{float(lat):.4f}, {float(lon):.4f}"
+    except Exception:
+        return f"{lat}, {lon}"
+
+# Keep last results in session state
+if "last_run" not in st.session_state:
+    st.session_state["last_run"] = None
+if "notifications" not in st.session_state:
+    st.session_state["notifications"] = True
+
+# ---------- AQI visualization helpers ----------
+AQI_CATS = [
+    (0,   50,  "Good",                              "#00E400"),
+    (51,  100, "Moderate",                          "#FFFF00"),
+    (101, 150, "Unhealthy for Sensitive Groups",    "#FF7E00"),
+    (151, 200, "Unhealthy",                         "#FF0000"),
+    (201, 300, "Very Unhealthy",                    "#8F3F97"),
+    (301, 500, "Hazardous",                         "#7E0023"),
+]
+
+def aqi_category_and_color(value: float | None):
+    if value is None:
+        return "—", "#999999"
+    v = max(0, min(500, float(value)))
+    for lo, hi, name, hexcol in AQI_CATS:
+        if lo <= v <= hi:
+            return name, hexcol
+    return "Hazardous", "#7E0023"
+
+def plot_aqi_bar(value: float | None, show_label=True, height=0.35):
+    """
+    Draw an EPA-style horizontal AQI bar [0..500] with a vertical marker at `value`.
+    Returns a matplotlib figure for st.pyplot.
+    """
+    fig, ax = plt.subplots(figsize=(7.5, 1.0))
+    left = 0
+    for lo, hi, name, hexcol in AQI_CATS:
+        width = hi - lo
+        ax.barh(y=0, width=width, left=lo, height=height, color=hexcol, edgecolor="black", linewidth=0.5)
+    ax.set_xlim(0, 500)
+    ax.set_yticks([])
+    ax.set_xlabel("AQI", fontsize=9)
+    ax.tick_params(axis='x', labelsize=8)
+
+    if value is not None:
+        v = max(0, min(500, float(value)))
+        ax.axvline(v, color="black", linewidth=2)
+        if show_label:
+            cat, _ = aqi_category_and_color(v)
+            ax.text(v, height + 0.12, f"{int(round(v))} • {cat}", ha="center", va="bottom", fontsize=9)
+
+    plt.tight_layout()
+    return fig
+
+
+
+# ---------- PAGE: HOME ----------
+if page.lower() == "home":
+    st.subheader("What this app does")
+    st.write(APP_PURPOSE)
+
+    st.markdown("### How it works")
+    st.markdown(
+        """
+        1. **FIRMS check** near your landfill coordinates.  
+        2. If fire detected → use **TEMPO** + **OpenAQ/PurpleAir** to fetch measurements.  
+        3. Compute **satellite AQI**, **ground AQI**, and **fused AQI**.  
+        4. Fetch **current weather** from OpenWeatherMap.  
+        5. **Forecast AQI** for 72 hours.  
+        """
+    )
+    st.info("Run a live check from the Monitor page.")
+
+    # Centered call-to-action button
+    cta1, cta2, cta3 = st.columns([1, 1, 1])
+    with cta2:
+        if st.button("➡️ Go to Monitor", key="cta_monitor", type="primary"):
+            _nav("monitor")  # uses your existing nav helper
+
+
+# ---------- PAGE: MONITOR ----------
+elif page.lower() == "monitor":
+    st.subheader("Monitor: run a check for fires and AQI")
+
+    # Defaults to Calabasas landfill (demo)
+    #demo_lat = core.LANDFILL.get("lat", 34.1439)
+    #demo_lon = core.LANDFILL.get("lon", -118.6615)
+
+    # --- Landfill selection (dropdown) ---
+    from landfill_pollution_detection_v2 import available_landfills, set_landfill_by_name  # adjust import path if needed
+
+    names = available_landfills()
+    default_idx = names.index("Calabasas Landfill") if "Calabasas Landfill" in names else 0
+    selected_name = st.selectbox("Choose landfill", options=names, index=default_idx)
+
+    lf = set_landfill_by_name(selected_name)
+    st.session_state["selected_landfill_name"] = lf.get("name", selected_name)
+    lat, lon = float(lf["lat"]), float(lf["lon"])
+
+    
+   # Show coords + current radius (read-only on this row)
+    c1, c2, c3 = st.columns([1, 1, 1])
+    with c1:
+        st.metric("Latitude", f"{lat:.6f}")
+    with c2:
+        st.metric("Longitude", f"{lon:.6f}")
+    with c3:
+        st.metric("Radius (km)", st.session_state.get("radius_km", 5))
+
+    # Editable inputs
+    col1, col2, col3 = st.columns([1,1,1])
+    with col1:
+        lat = st.number_input("Latitude", value=float(lat), format="%.6f")
+    with col2:
+        lon = st.number_input("Longitude", value=float(lon), format="%.6f")
+    with col3:
+        radius_km = st.slider(
+            "Detection radius (km)",
+            min_value=1, max_value=20, value=st.session_state.get("radius_km", 5), step=1,
+            key="radius_km_main"
+        )
+    st.session_state["radius_km"] = radius_km
+
+
+    st.checkbox("Enable in-app notifications", value=st.session_state["notifications"], key="notifications")
+
+    st.markdown("---")
+    run_col, info_col = st.columns([1,2])
+    with run_col:
+        run_btn = st.button("🚀 Check now", type="primary")
+    with info_col:
+        st.caption(
+            "On click, the app runs FIRMS check. If a fire is detected, it fetches data to get current AQI "
+            "and forecast AQI for next 72 hours."
+        )
+
+    if run_btn:
+        with st.spinner("Checking for fire at chosen landfill…"):
+            out = core.run_workflow_if_fire(
+                lat=float(lat),
+                lon=float(lon),
+                radius_km=float(radius_km),
+                run_parallel=True,
+                forecast_horizon_h=72
+            )
+
+
+            out["landfill_name"] = st.session_state.get("selected_landfill_name", selected_name)
+            out["lat"] = float(lat)
+            out["lon"] = float(lon)
+
+            st.session_state["last_run"] = out
+
+        if out.get("fire_detected"):
+            if st.session_state["notifications"]:
+                st.toast("🔥 Fire detected near the chosen landfill. Click **Results** to see AQI.", icon="🔥")
+            landfill_name = st.session_state.get("selected_landfill_name", "selected site")
+            st.warning(f"🔥 Fire detected near **{landfill_name}** — {_format_latlon(lat, lon)}.")
+        else:
+            st.info("No ongoing fire detected near the chosen landfill.")
+
+    # ----------- Last run summary (visual) -----------
+    if st.session_state["last_run"] is not None:
+        st.markdown("---")
+        st.markdown("### Last run summary")
+
+        lr = st.session_state["last_run"]
+        run_time = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%SZ")
+        fire = bool(lr.get("fire_detected"))
+        fused = lr.get("fused_aqi")
+
+
+        landfill_name = lr.get("landfill_name", st.session_state.get("selected_landfill_name", "—"))
+        coords_str = _format_latlon(lr.get("lat", None) or lat, lr.get("lon", None) or lon)
+        st.markdown(f"**Landfill checked:** {landfill_name}  \n**Coordinates:** {coords_str}")
+
+        c1, c2, c3 = st.columns([1,1,3])
+        with c1:
+            st.markdown("**Run time (UTC)**")
+            st.write(run_time)
+        with c2:
+            st.markdown("**Fire detected**")
+            if fire:
+                st.markdown('<span style="color:#D32F2F;font-weight:700;">YES</span>', unsafe_allow_html=True)
+            else:
+                st.markdown('<span style="color:#388E3C;font-weight:700;">NO</span>', unsafe_allow_html=True)
+        with c3:
+            st.markdown("**Fused AQI**")
+            cat, col = aqi_category_and_color(fused)
+            if fused is None:
+                st.write("—")
+            else:
+                st.write(f"{int(round(fused))} • {cat}")
+            fig = plot_aqi_bar(fused)
+            st.pyplot(fig, clear_figure=True)
+
+        # Navigation buttons (no dead hyperlinks)
+        nav1, nav2 = st.columns([1,1])
+        with nav1:
+            if st.button("➡️ Go to Results"):
+                _nav("results")
+        with nav2:
+            if st.button("🏠 Back to Home"):
+                _nav("home")
+
+# ---------- PAGE: RESULTS ----------
+elif page.lower() == "results":
+    st.subheader("Results")
+
+    # --- Landfill name (if chosen on Monitor page) ---
+    landfill_name = st.session_state.get("selected_landfill_name")
+    if landfill_name:
+        st.markdown(f"**Landfill checked:** {landfill_name}")
+
+    # --- Last run results ---
+    lr = st.session_state.get("last_run")
+
+    if not lr:
+        st.info("No results yet. Go to **Monitor** and click **Check now**.")
+        col_a, col_b = st.columns([1, 3])
+        with col_a:
+            if st.button("Go to Monitor", key="go_to_monitor_results_empty"):
+                new_qp = dict(st.query_params)
+                new_qp["page"] = "Monitor"
+                st.query_params = new_qp
+                st.rerun()
+        #with col_b:
+        #    st.markdown("Or click this link: [Open Monitor](?page=Monitor)")
+
+    else:
+        if not lr.get("fire_detected"):
+            st.success("✅ No ongoing fire.")
+            st.caption("If you believe there should be one, try increasing the radius on the Monitor page and re-run.")
+
+            colb1, colb2 = st.columns([1,1])
+            with colb1:
+                if st.button("🔁 Run another check"):
+                    _nav("monitor")
+            with colb2:
+                if st.button("🏠 Home"):
+                    _nav("home")
+
+        else:
+            # --- Current fused AQI + color bar ---
+            fused = lr.get("fused_aqi")
+            cA, cB = st.columns([1,3])
+            with cA:
+                st.markdown("**Current fused AQI**")
+                cat, col = aqi_category_and_color(fused)
+                st.markdown(
+                    f'<div style="font-size:28px;font-weight:700;color:{col};">{int(round(fused)) if fused is not None else "—"}</div>'
+                    f'<div style="color:#666;">{cat if fused is not None else ""}</div>',
+                    unsafe_allow_html=True
+                )
+            with cB:
+                fig = plot_aqi_bar(fused)
+                st.pyplot(fig, clear_figure=True)
+
+            # --- Predicted AQI + chart ---
+            fdf = lr.get("forecast_df")
+            if isinstance(fdf, pd.DataFrame) and not fdf.empty and {"datetime","pred_AQI"}.issubset(fdf.columns):
+                next_hour = float(fdf["pred_AQI"].iloc[0])
+                st.markdown("#### 72-hour forecast")
+                plot_df = fdf.copy().set_index("datetime")[["pred_AQI"]]
+                st.line_chart(plot_df)
+                st.caption(f"Next-hour predicted AQI: **{int(round(next_hour))}**")
+            else:
+                st.warning("No forecast data available (model may have skipped training).")
+
+            # --- More details: friendly cards instead of raw JSON ---
+            with st.expander("More details", expanded=False):
+                satellite_current = lr.get("satellite_current", {}) or {}
+                ground_current    = lr.get("ground_current", {}) or {}
+                sat_breakdown     = lr.get("sat_breakdown", {}) or {}
+                ground_breakdown  = lr.get("ground_breakdown", {}) or {}
+
+                # Satellite (TEMPO): show all keys even if missing
+                sat_expected = [
+                    ("NO2 (molec/cm²)",          satellite_current.get("NO2"),  None),
+                    ("O3 trop (molec/cm²)",      satellite_current.get("O3"),   None),
+                    ("HCHO (molec/cm²)",         satellite_current.get("HCHO"), None),
+                    ("UV Aerosol Index (UVAI)",  satellite_current.get("AER"),  None),
+                ]
+                sat_items = [(label, _fmt_value(val, unit)) for (label, val, unit) in sat_expected]
+                render_cards("Satellite (TEMPO)", sat_items, cols=2)
+
+                # Ground (OpenAQ / PurpleAir fallback): always show all six
+                ground_expected = [
+                    ("PM2.5 (µg/m³)", ground_current.get("PM2.5"), "µg/m³"),
+                    ("PM10 (µg/m³)",  ground_current.get("PM10"), "µg/m³"),
+                    ("NO₂ (ppb)",     ground_current.get("NO2"),  "ppb"),
+                    ("O₃ (ppb)",      ground_current.get("O3"),   "ppb"),
+                    ("CO (ppm)",      ground_current.get("CO"),   "ppm"),
+                    ("SO₂ (ppb)",     ground_current.get("SO2"),  "ppb"),
+                ]
+                ground_items = [(label, _fmt_value(val, unit)) for (label, val, unit) in ground_expected]
+                render_cards("Ground (OpenAQ / PurpleAir)", ground_items, cols=3)
+
+                # AQI sub-indices (optional)
+                if isinstance(sat_breakdown, dict) and sat_breakdown:
+                    s_items = [(k, _fmt_value(v, None, digits=0)) for k, v in sat_breakdown.items()]
+                    render_cards("Satellite AQI sub-indices", s_items, cols=3)
+
+                if isinstance(ground_breakdown, dict) and ground_breakdown:
+                    display_order = ["PM2.5", "PM10", "NO2", "O3", "CO", "SO2"]
+                    g_items = []
+                    for pol in display_order:
+                        sub = ground_breakdown.get(pol, {})
+                        val = sub.get("subindex") if isinstance(sub, dict) else None
+                        g_items.append((pol, _fmt_value(val, None, digits=0)))
+                    render_cards("Ground AQI sub-indices", g_items, cols=3)
+
+                # Training diagnostics (if available)
+                diag_left, diag_right = st.columns([1,2])
+                with diag_left:
+                    conf = lr.get("confidence_score")
+                    if conf is None:
+                        st.metric("Forecast confidence", "—")
+                    else:
+                        # nice formatting: 0–100, no decimals
+                        st.metric("Forecast confidence", f"{int(round(conf))} / 100")
+                with diag_right:
+                    reason = lr.get("training_fallback_reason") or "—"
+                    st.caption(f"Training note: {reason}")
+
+                st.caption("Values sourced from NASA TEMPO (via Harmony) and OpenAQ v3 (with PurpleAir only for PM2.5 when missing).")
+
+            # --- Navigation ---
+            colb1, colb2 = st.columns([1,1])
+            with colb1:
+                if st.button("🔁 Run another check"):
+                    _nav("monitor")
+            with colb2:
+                if st.button("🏠 Home"):
+                    _nav("home")
+
+# Footer
+st.markdown("---")
+st.caption(
+    "Demo app — uses public data sources (FIRMS / TEMPO via Harmony / OpenAQ / PurpleAir / OpenWeatherMap). "
+    "If a service is unavailable or authentication fails, the demo may fall back to mock data."
+)
