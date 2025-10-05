@@ -1313,78 +1313,114 @@ def _dynamic_feature_list(df: pd.DataFrame) -> list:
         if "rain" in df.columns: extra.append("rain")
     return base + extra
 
-def _train_and_forecast(history_df: pd.DataFrame,
-                        current_meteo: dict,
-                        fused_value: float,
-                        horizon: int = 72):
+def train_and_forecast_safe(
+    history_df,
+    fused_value,
+    current_meteo: dict,
+    horizon: int = 72,
+    features=("fused_AQI", "temp", "humidity", "wind_speed", "wind_deg", "pressure"),
+    min_rows: int = 24,
+):
     """
-    Pipeline 6: LightGBM autoregressive forecast (fused_AQI -> fused_AQI_next).
-    Uses callbacks-based early stopping (compatible across lgb versions).
-    Returns (forecast_df, valid_rmse or None).
+    Train a LightGBM regressor to predict next-hour fused_AQI and produce a horizon-hour forecast.
+    Robust to missing/dirty data. Falls back to a naive persistence forecast on any failure.
+
+    Returns:
+        forecast_df (pd.DataFrame with ['datetime','pred_AQI']),
+        valid_rmse (float | None),
+        fallback_reason (str | None)  # None if LightGBM succeeded
     """
+
+    def _naive_forecast(last_val, H):
+        v = float(last_val) if (last_val is not None and np.isfinite(last_val)) else 75.0
+        t0 = pd.Timestamp.utcnow()
+        return pd.DataFrame(
+            {"datetime": [t0 + pd.Timedelta(hours=h + 1) for h in range(H)],
+             "pred_AQI": [v] * H}
+        )
+
+    # 0) Guard: history present?
+    if history_df is None or len(history_df) == 0:
+        return _naive_forecast(fused_value, horizon), None, "history_df is empty"
+
+    df = history_df.copy()
+
+    # 1) Ensure required feature columns exist
+    for col in features:
+        if col not in df.columns:
+            df[col] = np.nan
+
+    # 2) Coerce to numeric and clean NaNs/inf
+    for col in set(features) | {"fused_AQI"}:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    df.replace([np.inf, -np.inf], np.nan, inplace=True)
+
+    # 3) Build next-hour target and drop rows without complete data
+    df["target"] = df["fused_AQI"].shift(-1)
+    df = df.dropna(subset=list(features) + ["target"]).reset_index(drop=True)
+
+    if len(df) < min_rows:
+        return _naive_forecast(fused_value, horizon), None, f"too few training rows ({len(df)}) after cleaning"
+
+    # 4) Time-based split
+    split = int(len(df) * 0.8)
+    X_train, y_train = df.loc[:split - 1, list(features)], df.loc[:split - 1, "target"]
+    X_val,   y_val   = df.loc[split:,    list(features)], df.loc[split:,    "target"]
+
+    # Final sanity
+    if X_train.isna().any().any() or X_val.isna().any().any():
+        return _naive_forecast(fused_value, horizon), None, "NaNs remain after cleaning"
+
     try:
         import lightgbm as lgb
-    except Exception as e:
-        print("LightGBM unavailable; skipping training:", e)
-        return pd.DataFrame(), None
-
-    try:
-        df = history_df.copy().reset_index(drop=True)
-        if "fused_AQI" not in df.columns:
-            raise ValueError("history_df must include 'fused_AQI'.")
-
-        feats = _dynamic_feature_list(df)
-
-        # Build t+1 target
-        df["target"] = df["fused_AQI"].shift(-1)
-        df = df.dropna(subset=["target"]).reset_index(drop=True)
-        if df.empty:
-            raise ValueError("Not enough rows to train.")
-
-        # Make sure all features exist
-        for f in feats:
-            if f not in df.columns:
-                df[f] = np.nan
-
-        X, y = df[feats], df["target"]
-        split = max(1, int(len(X) * 0.8))
-        X_train, y_train = X.iloc[:split], y.iloc[:split]
-        X_val,   y_val   = X.iloc[split:], y.iloc[split:]
 
         train_data = lgb.Dataset(X_train, label=y_train)
-        val_data   = lgb.Dataset(X_val, label=y_val, reference=train_data)
+        val_data   = lgb.Dataset(X_val,   label=y_val, reference=train_data)
+
         params = {"objective": "regression", "metric": "rmse", "verbosity": -1}
+        callbacks = [
+            lgb.early_stopping(stopping_rounds=20),
+            lgb.log_evaluation(period=50),
+        ]
 
-        callbacks = [lgb.early_stopping(stopping_rounds=20, verbose=False)]
-        model = lgb.train(params, train_data, valid_sets=[val_data],
-                          num_boost_round=200, callbacks=callbacks)
+        model = lgb.train(
+            params,
+            train_data,
+            valid_sets=[val_data],
+            num_boost_round=200,
+            callbacks=callbacks,
+        )
 
-        # Build current feature vector for rollout
-        def _fv_get(name, default=np.nan):
-            if name == "fused_AQI":
-                return fused_value if fused_value is not None else float(df["fused_AQI"].iloc[-1])
-            if name in current_meteo:
-                return current_meteo.get(name, default)
-            # fallback to last known historical value
-            return float(df[name].iloc[-1]) if name in df.columns else default
+        # Extract RMSE safely
+        valid_rmse = None
+        try:
+            valid_rmse = model.best_score.get("valid_0", {}).get("rmse")
+        except Exception:
+            pass
 
-        cur_feats = {f: _fv_get(f) for f in feats}
+        # 5) Build current feature vector
+        cur_feats = {k: float(current_meteo.get(k, 0.0)) for k in features if k != "fused_AQI"}
+        cur_feats["fused_AQI"] = float(fused_value) if fused_value is not None else float(df["fused_AQI"].iloc[-1])
 
-        # Rollout horizon hours (simple autoregressive)
-        now = datetime.utcnow()
-        rows = []
+        # 6) Forecast iteratively (autoregressive on fused_AQI)
+        out = []
+        t0 = pd.Timestamp.utcnow()
         for h in range(horizon):
-            x_df = pd.DataFrame([cur_feats])[feats]
-            pred = float(model.predict(x_df, num_iteration=model.best_iteration)[0])
-            rows.append({"datetime": now + timedelta(hours=h + 1), "pred_AQI": pred})
-            cur_feats["fused_AQI"] = pred  # feed back
+            x_df = pd.DataFrame([cur_feats])[list(features)]
+            try:
+                pred = float(model.predict(x_df, num_iteration=getattr(model, "best_iteration", None))[0])
+            except Exception:
+                pred = float(model.predict(x_df)[0])
+            out.append({"datetime": t0 + pd.Timedelta(hours=h + 1), "pred_AQI": pred})
+            cur_feats["fused_AQI"] = pred  # autoregressive update
 
-        forecast_df = pd.DataFrame(rows)
-        valid_rmse = model.best_score.get("valid_0", {}).get("rmse")
-        return forecast_df, valid_rmse
+        forecast_df = pd.DataFrame(out)
+        return forecast_df, valid_rmse, None
+
     except Exception as e:
-        print("Training error:", e)
-        return pd.DataFrame(), None
+        # LightGBM not installed, version issues, or runtime error
+        return _naive_forecast(fused_value, horizon), None, f"LightGBM error: {e.__class__.__name__}"
+
 
 def run_workflow_if_fire(lat: float, lon: float,
                          radius_km: float = 5.0,
