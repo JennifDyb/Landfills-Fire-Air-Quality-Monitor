@@ -1490,14 +1490,37 @@ def run_workflow_if_fire(lat: float, lon: float,
         print("Pipeline 5 (meteo) error:", e)
         current_meteo = {"temp": np.nan, "humidity": np.nan, "wind_speed": np.nan,
                          "wind_gust": None, "wind_deg": np.nan, "pressure": np.nan, "rain": 0.0}
+        
+    # Ensure the keys trainer expects exist (safe defaults)
+    for k in ("temp", "humidity", "wind_speed", "wind_deg", "pressure"):
+        current_meteo.setdefault(k, 0.0)
 
     # --- Pipeline 6: training/forecast (requires history_df) ---
-    forecast_df, valid_rmse = pd.DataFrame(), None
-    if "history_df" in globals() and isinstance(history_df, pd.DataFrame) and not history_df.empty:
-        forecast_df, valid_rmse = _train_and_forecast(history_df, current_meteo, fused_value,
-                                                      horizon=forecast_horizon_h)
-    else:
-        print("Skipping training: history_df is missing or empty.")
+    try:
+        history_df = try_build_real_history(days=90)
+        if history_df is None or not isinstance(history_df, pd.DataFrame) or history_df.empty:
+            history_df = build_synthetic_history(days=90)
+    except Exception as e:
+        print("History build error; using synthetic:", e)
+        history_df = build_synthetic_history(days=90)
+
+    try:
+        forecast_df, valid_rmse, fallback_reason = train_and_forecast_safe(
+            history_df=history_df,
+            fused_value=fused_value,
+            current_meteo=current_meteo,
+            horizon=int(forecast_horizon_h),
+        )
+    except Exception as e:
+        print("Training error (unexpected); falling back to persistence:", e)
+        # Absolute safety fallback: persistence
+        t0 = pd.Timestamp.utcnow()
+        v = float(fused_value) if fused_value is not None else 75.0
+        forecast_df = pd.DataFrame({
+            "datetime": [t0 + pd.Timedelta(hours=h+1) for h in range(int(forecast_horizon_h))],
+            "pred_AQI": [v] * int(forecast_horizon_h)
+        })
+        valid_rmse, fallback_reason = None, "hard fallback: exception during training"
 
     return {
         "fire_detected": True,
@@ -1514,6 +1537,7 @@ def run_workflow_if_fire(lat: float, lon: float,
         "current_meteo": current_meteo,
         "forecast_df": forecast_df,
         "valid_rmse": valid_rmse,
+        "training_fallback_reason": fallback_reason,
     }
 
 # ===== Hourly scheduler: check FIRMS and trigger pipelines =====
