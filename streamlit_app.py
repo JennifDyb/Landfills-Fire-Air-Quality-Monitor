@@ -12,6 +12,7 @@ import matplotlib as mpl
 # Import your core pipelines
 import landfill_pollution_detection_v2 as core
 
+# --- Background image helper (kept, small tweak to panel opacity) ---
 def set_app_background(image_path: str, blur_px: int = 0, dim: float = 0.0):
     """
     Sets a full-page background image using base64 CSS injection.
@@ -24,7 +25,6 @@ def set_app_background(image_path: str, blur_px: int = 0, dim: float = 0.0):
         st.warning(f"Background image not found: {image_path}")
         return
     b64 = base64.b64encode(img_file.read_bytes()).decode()
-    # Optional dark overlay using linear-gradient, then the image
     overlay = f"linear-gradient(rgba(0,0,0,{dim}), rgba(0,0,0,{dim})), " if dim > 0 else ""
     css = f"""
     <style>
@@ -35,130 +35,82 @@ def set_app_background(image_path: str, blur_px: int = 0, dim: float = 0.0):
       }}
       /* Transparent header */
       [data-testid="stHeader"] {{ background: rgba(0,0,0,0); }}
-      /* Slightly translucent main block for readability */
+      /* Main content card for readability */
       .main .block-container {{
-        background: rgba(255,255,255,0.85);
+        background: rgba(255,255,255,0.92);
         border-radius: 12px;
         padding: 1rem 1.25rem;
       }}
-      /* Sidebar readability */
+      /* Sidebar card */
       [data-testid="stSidebar"] > div:first-child {{
-        background: rgba(255,255,255,0.85);
+        background: rgba(255,255,255,0.92);
       }}
     </style>
     """
     st.markdown(css, unsafe_allow_html=True)
 
 
-def enforce_text_color(color="#0f172a", link_color="#2563eb", sidebar_color=None):
-    """
-    Force app text colors via CSS.
-    - color: main text color (e.g., #0f172a for dark slate, #f8fafc for near-white)
-    - link_color: links
-    - sidebar_color: sidebar text (defaults to color)
-    """
-    if sidebar_color is None:
-        sidebar_color = color
-
-    st.markdown(f"""
-    <style>
-      /* Most text in the app */
-      [data-testid="stAppViewContainer"] * {{
-        color: {color} !important;
-      }}
-
-      /* Sidebar */
-      [data-testid="stSidebar"] * {{
-        color: {sidebar_color} !important;
-      }}
-
-      /* Links */
-      a, a:visited {{
-        color: {link_color} !important;
-      }}
-
-      /* Metric widget numbers and labels */
-      [data-testid="stMetricValue"], [data-testid="stMetricLabel"], [data-testid="stMetricDelta"] * {{
-        color: {color} !important;
-      }}
-
-      /* Expander titles */
-      details summary {{
-        color: {color} !important;
-      }}
-    </style>
-    """, unsafe_allow_html=True)
-
-    # Match Matplotlib plot text to the chosen color
-    mpl.rcParams.update({
-        "text.color": color,
-        "axes.labelcolor": color,
-        "xtick.color": color,
-        "ytick.color": color,
-        "figure.facecolor": (1,1,1,0),  # transparent-ish
-        "axes.facecolor": (1,1,1,0.85)  # readable panel for charts
-    })
-
-set_app_background("assets/app_image.jpg", blur_px=0, dim=0.45)
-enforce_text_color("#f8fafc", link_color="#93c5fd")  # light text
-
-# --- Make UI readable over a light/white sidebar & inputs ---
+# --- Unified readability CSS (no global * color rule) ---
 def apply_ui_readability(
-    base_text="#0f172a",           # dark slate for text
-    link_text="#2563eb",           # link blue
-    button_bg="#2563eb",           # primary button background
+    main_text="#0f172a",           # dark text in main area
+    sidebar_text="#0f172a",        # dark text in sidebar
+    link_text="#2563eb",           # blue links
+    button_bg="#2563eb",           # primary button bg
     button_text="#ffffff",         # primary button text
     button_border="#1d4ed8",       # primary button border
-    input_border="#cbd5e1",        # light slate border for inputs
-    placeholder="#64748b"          # placeholder color
+    input_border="#cbd5e1",        # input borders
+    placeholder="#64748b"          # placeholder text
 ):
     st.markdown(f"""
     <style>
-      /* ---------- Sidebar: force dark text on white bg ---------- */
+
+      /* ----------- MAIN AREA TEXT ----------- */
+      .main .block-container, .main .block-container * {{
+        color: {main_text} !important;
+      }}
+
+      /* ----------- SIDEBAR TEXT ----------- */
       [data-testid="stSidebar"] * {{
-        color: {base_text} !important;
+        color: {sidebar_text} !important;
       }}
 
-      /* Sidebar headings/expanders */
-      [data-testid="stSidebar"] h1, 
-      [data-testid="stSidebar"] h2, 
-      [data-testid="stSidebar"] h3, 
-      [data-testid="stSidebar"] h4, 
-      [data-testid="stSidebar"] h5, 
-      [data-testid="stSidebar"] h6,
-      [data-testid="stSidebar"] label,
-      [data-testid="stSidebar"] p,
-      [data-testid="stSidebar"] span {{
-        color: {base_text} !important;
+      /* ----------- LINKS ----------- */
+      a, a:visited {{
+        color: {link_text} !important;
       }}
 
-      /* ---------- Inputs: selectbox / number_input / text inputs --- */
+      /* ----------- INPUTS (selectbox, number_input, text_input, textarea) ----------- */
       /* Labels */
       label, .stSelectbox label, .stNumberInput label, .stTextInput label {{
-        color: {base_text} !important;
+        color: {main_text} !important;
       }}
 
       /* Native inputs */
       input, textarea, select {{
-        color: {base_text} !important;
+        color: {main_text} !important;
+        background: #ffffff !important;
         border-color: {input_border} !important;
       }}
 
-      /* Streamlit's selectbox uses BaseWeb select */
+      /* Streamlit BaseWeb select (dropdown trigger & value) */
       [data-baseweb="select"] * {{
-        color: {base_text} !important;
+        color: {main_text} !important;
       }}
-      /* Dropdown menu items for select */
+      /* Dropdown menu panel + options */
+      [data-baseweb="menu"] {{
+        background: #ffffff !important;
+      }}
       [data-baseweb="menu"] * {{
-        color: {base_text} !important;
+        color: {main_text} !important;
       }}
-      /* Placeholder text */
+
+      /* Placeholder */
       ::placeholder {{
         color: {placeholder} !important;
         opacity: 1 !important;
       }}
 
-      /* ---------- Buttons: make them visible and consistent ---------- */
+      /* ----------- BUTTONS (all locations, including sidebar) ----------- */
       div.stButton > button {{
         background-color: {button_bg} !important;
         color: {button_text} !important;
@@ -166,36 +118,42 @@ def apply_ui_readability(
         border-radius: 8px !important;
         padding: 0.5rem 0.9rem !important;
         font-weight: 600 !important;
-        box-shadow: 0 1px 2px rgba(16,24,40,0.07) !important;
+        box-shadow: 0 1px 2px rgba(16,24,40,0.08) !important;
       }}
-      div.stButton > button:hover {{
-        filter: brightness(1.05) !important;
-      }}
-      div.stButton > button:active {{
-        filter: brightness(0.95) !important;
-      }}
+      div.stButton > button:hover {{ filter: brightness(1.05) !important; }}
+      div.stButton > button:active {{ filter: brightness(0.95) !important; }}
 
-      /* Link color globally */
-      a, a:visited {{ color: {link_text} !important; }}
-
-      /* Metrics (numbers and labels) */
+      /* Metric text clarity */
       [data-testid="stMetricValue"],
       [data-testid="stMetricLabel"],
       [data-testid="stMetricDelta"] * {{
-        color: {base_text} !important;
+        color: {main_text} !important;
       }}
+
+      /* Tables */
+      .stTable, .stTable * {{ color: {main_text} !important; }}
 
       /* Expander titles */
       details summary {{
-        color: {base_text} !important;
+        color: {main_text} !important;
       }}
-
-      /* Table text */
-      .stTable, .stTable * {{ color: {base_text} !important; }}
 
     </style>
     """, unsafe_allow_html=True)
 
+    # Also align Matplotlib text with main text color
+    mpl.rcParams.update({
+        "text.color": main_text,
+        "axes.labelcolor": main_text,
+        "xtick.color": main_text,
+        "ytick.color": main_text,
+        "figure.facecolor": (1,1,1,0),
+        "axes.facecolor": (1,1,1,0.92)
+    })
+
+
+# --- Call these ONCE near the top of your app (after st.set_page_config) ---
+set_app_background("assets/app_image.jpg", blur_px=0, dim=0.45)
 apply_ui_readability()
 
 
