@@ -31,6 +31,7 @@ from datetime import datetime, timedelta,timezone
 from shapely.geometry import Point
 from scipy import stats
 from concurrent.futures import ThreadPoolExecutor
+import streamlit as st
 
 # Harmony
 from harmony import BBox, Client, Collection, Request
@@ -45,13 +46,21 @@ import lightgbm as lgb
 LANDFILL = {"name": "Calabasas Landfill", "lat": 34.1439, "lon": -118.6615}
 
 # Environment variables
-load_dotenv()
-FIRMS_API_KEY = os.getenv("FIRMS_API_KEY")          #NASA FIRMS API
-EARTHDATA_USER = os.getenv("EARTHDATA_USER")        # Earthdata username for Harmony/Earthaccess
-EARTHDATA_PASS = os.getenv("EARTHDATA_PASS")        # Earthdata password
-PURPLEAIR_KEY = os.getenv("PURPLEAIR_KEY")          # PurpleAir  key
-OWM_API_KEY = os.getenv("OWM_API_KEY")              # OpenWeatherMap optional key
-OPENAQ_API_KEY = os.getenv("OPENAQ_API_KEY")        # OpenAQ  key
+#load_dotenv()
+#FIRMS_API_KEY = os.getenv("FIRMS_API_KEY")          #NASA FIRMS API
+#EARTHDATA_USER = os.getenv("EARTHDATA_USER")        # Earthdata username for Harmony/Earthaccess
+#EARTHDATA_PASS = os.getenv("EARTHDATA_PASS")        # Earthdata password
+#PURPLEAIR_KEY = os.getenv("PURPLEAIR_KEY")          # PurpleAir  key
+#OWM_API_KEY = os.getenv("OWM_API_KEY")              # OpenWeatherMap optional key
+#OPENAQ_API_KEY = os.getenv("OPENAQ_API_KEY")        # OpenAQ  key
+
+
+FIRMS_API_KEY = st.secrets["FIRMS_API_KEY"]
+EARTHDATA_USER = st.secrets["EARTHDATA_USER"]
+EARTHDATA_PASS = st.secrets["EARTHDATA_PASS"]
+PURPLEAIR_KEY = st.secrets["PURPLEAIR_KEY"]
+OWM_API_KEY = st.secrets["OWM_API_KEY"]
+OPENAQ_API_KEY = st.secrets["OPENAQ_API_KEY"]
 
 # Defaults for the demo
 SAT_HIST_DAYS = 90      # history days for satellite percentile mapping
