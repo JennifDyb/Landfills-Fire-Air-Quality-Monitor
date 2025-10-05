@@ -161,8 +161,92 @@ def apply_theme(mode: str = "light_on_dark"):
         "grid.color": "#9aa4b2"
     })
 
+def force_main_readability(
+    card_bg="rgba(0,0,0,0.72)",   # darker translucent card
+    main_text="#f8fafc",          # near-white text
+    link_text="#cfe4ff"           # light link color
+):
+    """
+    Make the central content area highly readable on a busy image background:
+    - Darker translucent card behind all content
+    - Force bright text for headings/body in the main area
+    - Keep alerts legible (alerts remain light cards with dark text)
+    Uses high-specificity selectors and !important to override prior styles.
+    """
+    st.markdown(f"""
+    <style>
+      /* Dark translucent card behind EVERYTHING in the main content column */
+      [data-testid="stAppViewContainer"] .main .block-container,
+      [data-testid="stAppViewContainer"] [data-testid="block-container"],
+      section.main > div:first-child {{
+        background: {card_bg} !important;
+        border-radius: 12px !important;
+        padding: 1rem 1.25rem !important;
+      }}
+
+      /* Force bright text just in the MAIN content area */
+      [data-testid="stAppViewContainer"] .main .block-container *,
+      [data-testid="stAppViewContainer"] [data-testid="block-container"] * {{
+        color: {main_text} !important;
+      }}
+
+      /* Headings in main area */
+      [data-testid="stAppViewContainer"] .main h1,
+      [data-testid="stAppViewContainer"] .main h2,
+      [data-testid="stAppViewContainer"] .main h3,
+      [data-testid="stAppViewContainer"] .main h4,
+      [data-testid="stAppViewContainer"] .main h5,
+      [data-testid="stAppViewContainer"] .main h6 {{
+        color: {main_text} !important;
+      }}
+
+      /* Links in main area */
+      [data-testid="stAppViewContainer"] .main a,
+      [data-testid="stAppViewContainer"] .main a:visited {{
+        color: {link_text} !important;
+      }}
+
+      /* Keep alert boxes readable (they are light cards by default) */
+      [data-testid="stAppViewContainer"] .main .stAlert,
+      [data-testid="stAppViewContainer"] .main .stAlert * {{
+        color: #0f172a !important;    /* dark text */
+      }}
+      [data-testid="stAppViewContainer"] .main .stAlert > div {{
+        background: rgba(255,255,255,0.98) !important;
+        border-radius: 10px !important;
+      }}
+
+      /* Tables on dark card */
+      [data-testid="stAppViewContainer"] .main .stTable,
+      [data-testid="stAppViewContainer"] .main .stTable * {{
+        color: {main_text} !important;
+      }}
+
+      /* Metric text on dark card */
+      [data-testid="stAppViewContainer"] .main [data-testid="stMetricValue"],
+      [data-testid="stAppViewContainer"] .main [data-testid="stMetricLabel"],
+      [data-testid="stAppViewContainer"] .main [data-testid="stMetricDelta"] * {{
+        color: {main_text} !important;
+      }}
+    </style>
+    """, unsafe_allow_html=True)
+
+    # Match Matplotlib text to the bright-on-dark main area
+    mpl.rcParams.update({
+        "text.color": main_text,
+        "axes.labelcolor": main_text,
+        "xtick.color": main_text,
+        "ytick.color": main_text,
+        "axes.edgecolor": main_text,
+        "grid.color": "#9aa4b2",
+        "figure.facecolor": (0,0,0,0),   # transparent figure
+        "axes.facecolor": (0,0,0,0),     # we already provide a dark card
+    })
+
+
 set_app_background("assets/app_image.jpg", blur_px=0, dim=0.45)
 apply_theme("light_on_dark")
+force_main_readability(card_bg="rgba(0,0,0,0.72)")
 # ------------------------------------------------------------------------------
 
 
