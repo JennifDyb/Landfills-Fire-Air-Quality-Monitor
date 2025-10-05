@@ -15,6 +15,9 @@ Structure:
 
 # Imports and basic config
 import os
+import inspect
+import zipfile
+from pathlib import Path
 from dotenv import load_dotenv
 import io
 import json
@@ -249,7 +252,6 @@ print(fires_near.head().to_string(index=False))
 # Pipeline 2: TEMPO via Harmony (robust + mock fallback)
 
 # === Config / constants ===
-
 TEMPO_COLLECTIONS = {
     "NO2":  "TEMPO_NO2_L2",
     "O3":   "TEMPO_O3PROF_L2",
@@ -267,13 +269,13 @@ TEMPO_CMR_IDS = {
 
 # Mock fallback (roughly realistic magnitudes)
 MOCK_TEMPO = {
-    "NO2":  5.0e14, # molec/cm^2
-    "O3":   6.0e17, # molec/cm^2 (trop)
-    "HCHO": 1.5e15, # molec/cm^2
-    "AER":  0.3, # UVAI (unitless)
+    "NO2":  5.0e14,  # molec/cm^2
+    "O3":   6.0e17,  # molec/cm^2 (trop)
+    "HCHO": 1.5e15,  # molec/cm^2
+    "AER":  0.3,     # UVAI (unitless)
 }
 
-# === Helpers ===
+# ---------------- Helpers ----------------
 def _ensure_netrc():
     """Create ~/.netrc for EDL if EARTHDATA_USER/PASS set and no valid netrc exists."""
     if not (EARTHDATA_USER and EARTHDATA_PASS):
@@ -293,14 +295,65 @@ def _ensure_netrc():
     if needs_write:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
-            f.write(
-                "machine urs.earthdata.nasa.gov login {u} password {p}\n".format(
-                    u=EARTHDATA_USER, p=EARTHDATA_PASS
-                )
-            )
+            f.write(f"machine urs.earthdata.nasa.gov login {EARTHDATA_USER} password {EARTHDATA_PASS}\n")
         os.chmod(path, 0o600)
 
-def _open_dataset_any(path):
+def _download_harmony_safe(client: Client, job, directory: str, show_progress: bool = False) -> list[str]:
+    """
+    Works across harmony-py versions: uses `show_progress` only if supported.
+    Returns a list of downloaded file paths (expands zip bundles).
+    """
+    os.makedirs(directory, exist_ok=True)
+
+    # Call download with/without the extra kwarg
+    try:
+        sig = inspect.signature(client.download)
+        kwargs = {"directory": directory}
+        if "show_progress" in sig.parameters:
+            kwargs["show_progress"] = show_progress
+        out = client.download(job, **kwargs)  # may return list/str/None depending on version
+    except TypeError:
+        # Very old signature – no kwargs except directory
+        out = client.download(job, directory=directory)
+
+    # Normalize to list of files
+    files: list[str] = []
+    if isinstance(out, list):
+        files = [str(p) for p in out if p]
+    elif isinstance(out, str):
+        if os.path.isdir(out):
+            files = [str(p) for p in Path(out).glob("**/*") if p.is_file()]
+        elif os.path.isfile(out):
+            files = [out]
+
+    # Some versions return None but write to directory; glob the dir
+    if not files:
+        files = [str(p) for p in Path(directory).glob("**/*") if p.is_file()]
+
+    # Expand any ZIPs Harmony might have produced
+    expanded = []
+    for f in files:
+        if f.lower().endswith(".zip"):
+            try:
+                with zipfile.ZipFile(f) as z:
+                    z.extractall(directory)
+                    # Collect extracted members as full paths
+                    for name in z.namelist():
+                        p = Path(directory) / name
+                        if p.is_file():
+                            expanded.append(str(p))
+            except Exception:
+                # If extraction fails, keep the zip path for troubleshooting
+                expanded.append(f)
+        else:
+            expanded.append(f)
+
+    # Keep only scientific data files we can open
+    keep_ext = (".nc", ".nc4", ".h5", ".hdf5", ".hdf", ".cdf")
+    cleaned = [f for f in expanded if f.lower().endswith(keep_ext)]
+    return cleaned or expanded  # last resort: return whatever we’ve got
+
+def _open_dataset_any(path: str) -> xr.Dataset:
     """Try opening a file with multiple xarray backends; return Dataset or raise last error."""
     last = None
     for engine in (None, "netcdf4", "h5netcdf"):
@@ -322,6 +375,7 @@ def _choose_var_for_pol(ds: xr.Dataset, pol: str) -> str | None:
         return None
 
     if pol == "AER":
+        # UV Aerosol Index lives in O3TOT product
         v = pick(["uvai", "uv_ai", "uv-aerosol", "uv_aerosol", "aerosol_index"])
         if v: return v
     if pol == "O3":
@@ -362,6 +416,7 @@ def _safe_sel(ds: xr.Dataset, var: str, lat: float, lon: float) -> float:
             ds = ds.rename(rename)
             lat_name, lon_name = "lat", "lon"
 
+    # Wrap longitude if dataset is 0..360 and lon is negative
     if lon_name and lon < 0:
         try:
             lvals = ds[lon_name].values
@@ -370,6 +425,7 @@ def _safe_sel(ds: xr.Dataset, var: str, lat: float, lon: float) -> float:
         except Exception:
             pass
 
+    # Sort coords if needed for nearest selection stability
     try:
         if np.any(np.diff(ds[lat_name].values) < 0): ds = ds.sortby(lat_name)
         if np.any(np.diff(ds[lon_name].values) < 0): ds = ds.sortby(lon_name)
@@ -397,6 +453,7 @@ def _concept_id(short_name: str) -> str:
         raise RuntimeError(f"No concept ID configured for {short_name}")
     return cid
 
+# ---------------- Main function ----------------
 def request_tempo_subset(lat: float, lon: float, days_back: int = 1,
                          collections: dict = TEMPO_COLLECTIONS) -> dict:
     """
@@ -406,20 +463,21 @@ def request_tempo_subset(lat: float, lon: float, days_back: int = 1,
     # Prepare auth (netrc) if creds provided
     _ensure_netrc()
 
+    # If creds are missing, skip straight to mock
+    if not (EARTHDATA_USER and EARTHDATA_PASS):
+        print("Earthdata creds not set -> skipping Harmony calls, using mock satellite data.")
+        return dict(MOCK_TEMPO)
+
     # bbox ~5–6 km
     bbox = BBox(lon - 0.05, lat - 0.05, lon + 0.05, lat + 0.05)
     t_end = datetime.utcnow()
     t_start = t_end - timedelta(days=int(days_back))
     temporal = {"start": t_start, "stop": t_end}  # Harmony expects datetimes
 
-    # If creds are missing, skip straight to mock
-    if not (EARTHDATA_USER and EARTHDATA_PASS):
-        print("Earthdata creds not set -> skipping Harmony calls, using mock satellite data.")
-        return dict(MOCK_TEMPO)
-
     results = {}
     try:
-        os.makedirs("./tempo_data", exist_ok=True)
+        out_dir = "./tempo_data"
+        os.makedirs(out_dir, exist_ok=True)
         client = Client()  # reads ~/.netrc
 
         for pol, short_name in collections.items():
@@ -435,8 +493,8 @@ def request_tempo_subset(lat: float, lon: float, days_back: int = 1,
                     format="application/x-netcdf4",
                 )
 
-                job_id = client.submit(req)  # returns job id / job object depending on version
-                files = client.download(job_id, directory="./tempo_data", show_progress=False)
+                job_obj = client.submit(req)  # returns job id / job object depending on version
+                files = _download_harmony_safe(client, job_obj, directory=out_dir, show_progress=False)
                 if not files:
                     print(f"  No files returned for {pol}, using mock.")
                     results[pol] = MOCK_TEMPO.get(pol)
@@ -454,9 +512,7 @@ def request_tempo_subset(lat: float, lon: float, days_back: int = 1,
                                 continue
                             value = _safe_sel(ds, varname, lat, lon)
                             break
-                    except Exception as e_file:
-                        # File may be an error artifact or non-netcdf; try next
-                        # print(f"  {pol}: file {os.path.basename(path)} error: {e_file}")
+                    except Exception:
                         continue
 
                 if value is None or (isinstance(value, float) and np.isnan(value)):
@@ -480,11 +536,11 @@ def request_tempo_subset(lat: float, lon: float, days_back: int = 1,
             results[pol] = MOCK_TEMPO.get(pol)
     return results
 
+
 # ---- Run satellite ingestion (example) ----
 satellite_current = request_tempo_subset(LANDFILL["lat"], LANDFILL["lon"], days_back=1)
 print("Satellite values (TEMPO or mock):")
 print(satellite_current)
-
 
 # Pipeline 3 - Ground pipeline: OpenAQ v3 (for O3, NO2, PM2.5, PM10, CO, SO2) + PurpleAir (PM2.5) with mock fallback
 
