@@ -988,7 +988,9 @@ print("Ground breakdown (subindices):", ground_breakdown)
 # Simple visualization of the current indices and breakdown & provenance
 
 def _as_subindex(entry):
-    """Return a numeric subindex from either a dict({'subindex': x}) or a plain number; else None."""
+    """Return a numeric subindex from either a dict({'subindex': x}) 
+    or a plain number; else None."""
+
     if isinstance(entry, dict):
         return entry.get("subindex")
     if isinstance(entry, (int, float, np.number)):
@@ -1008,21 +1010,21 @@ print(f"Ground-AQI   : {ground_aqi_value} (dominant: {ground_dom})")
 print(f"Fused-AQI    : {fused_value}\n")
 
 # 2) Bar chart of subindices (sat vs ground) for pollutants present
-pols = sorted(set(list(sat_breakdown.keys()) + list(ground_breakdown.keys())))
-sat_vals_plot = [_get_subindex(sat_breakdown, p) for p in pols]
-ground_vals_plot = [_get_subindex(ground_breakdown, p) for p in pols]
+#pols = sorted(set(list(sat_breakdown.keys()) + list(ground_breakdown.keys())))
+#sat_vals_plot = [_get_subindex(sat_breakdown, p) for p in pols]
+#ground_vals_plot = [_get_subindex(ground_breakdown, p) for p in pols]
 
-x = np.arange(len(pols))
-width = 0.35
-fig, ax = plt.subplots(figsize=(10,5))
-ax.bar(x - width/2, [v if v is not None else 0 for v in sat_vals_plot], width, label='Satellite subindex')
-ax.bar(x + width/2, [v if v is not None else 0 for v in ground_vals_plot], width, label='Ground subindex')
-ax.set_xticks(x)
-ax.set_xticklabels(pols)
-ax.set_ylabel("AQI Sub-index")
-ax.set_title("Satellite vs Ground AQI sub-indices (current)")
-ax.legend()
-plt.show()
+#x = np.arange(len(pols))
+#width = 0.35
+#fig, ax = plt.subplots(figsize=(10,5))
+#ax.bar(x - width/2, [v if v is not None else 0 for v in sat_vals_plot], width, label='Satellite subindex')
+#ax.bar(x + width/2, [v if v is not None else 0 for v in ground_vals_plot], width, label='Ground subindex')
+#ax.set_xticks(x)
+#ax.set_xticklabels(pols)
+#ax.set_ylabel("AQI Sub-index")
+#ax.set_title("Satellite vs Ground AQI sub-indices (current)")
+#ax.legend()
+#plt.show()
 
 # 3) Provenance: list sources that contributed to fused AQI
 print("\n=== PROVENANCE ===")
