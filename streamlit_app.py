@@ -119,13 +119,13 @@ elif page.lower() == "monitor":
     #demo_lon = core.LANDFILL.get("lon", -118.6615)
 
     # --- Landfill selection (dropdown) ---
-    from core import available_landfills, get_landfill  # adjust import path if needed
+    from landfill_pollution_detection_v2 import available_landfills, set_landfill_by_name  # adjust import path if needed
 
     names = available_landfills()
     default_idx = names.index("Calabasas Landfill") if "Calabasas Landfill" in names else 0
     selected_name = st.selectbox("Choose landfill", options=names, index=default_idx)
 
-    lf = get_landfill(selected_name)
+    lf = set_landfill_by_name(selected_name)
     lat, lon = float(lf["lat"]), float(lf["lon"])
 
     # Show coords + optional radius
