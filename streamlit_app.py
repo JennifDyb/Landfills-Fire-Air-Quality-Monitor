@@ -10,9 +10,9 @@ import landfill_pollution_detection_v2 as core
 
 APP_TITLE = "Landfills Fire & Air Quality Monitor"
 APP_PURPOSE = (
-    "Watches for nearby landfills fires (NASA FIRMS). "
+    "Watches for landfills' fires (NASA FIRMS). "
     "If a fire is detected, it fetches TEMPO satellite data and local ground measurements, "
-    "computes satellite AQI, ground AQI, and a fused AQI, then trains a short-term model "
+    "computes a fused AQI from both satellite AQI and ground AQI. It then trains a short-term model "
     "to forecast AQI for the next 72 hours."
 )
 
@@ -133,6 +133,7 @@ elif page.lower() == "monitor":
     selected_name = st.selectbox("Choose landfill", options=names, index=default_idx)
 
     lf = set_landfill_by_name(selected_name)
+    st.session_state["selected_landfill_name"] = lf.get("name", selected_name)
     lat, lon = float(lf["lat"]), float(lf["lon"])
 
     
@@ -168,12 +169,12 @@ elif page.lower() == "monitor":
         run_btn = st.button("🚀 Check now", type="primary")
     with info_col:
         st.caption(
-            "On click, the app runs FIRMS check. If a fire is detected, it downloads data to get current AQI "
+            "On click, the app runs FIRMS check. If a fire is detected, it fetches data to get current AQI "
             "and forecast AQI for next 72 hours."
         )
 
     if run_btn:
-        with st.spinner("Running pipelines…"):
+        with st.spinner("AQI calculations ongoing…"):
             out = core.run_workflow_if_fire(
                 lat=float(lat),
                 lon=float(lon),
@@ -186,7 +187,8 @@ elif page.lower() == "monitor":
         if out.get("fire_detected"):
             if st.session_state["notifications"]:
                 st.toast("🔥 Fire detected near the chosen landfill. Click **Results** to see AQI.", icon="🔥")
-            st.success(f"Fire detected near {_format_latlon(lat, lon)}.")
+            landfill_name = st.session_state.get("selected_landfill_name", "selected site")
+            st.warning(f"🔥 Fire detected near **{landfill_name}** — {_format_latlon(lat, lon)}.")
         else:
             st.info("No ongoing fire detected near the chosen landfill.")
 
@@ -232,6 +234,11 @@ elif page.lower() == "monitor":
 # ---------- PAGE: RESULTS ----------
 elif page.lower() == "results":
     st.subheader("Results")
+
+
+    landfill_name = st.session_state.get("selected_landfill_name")
+    if landfill_name:
+        st.markdown(f"**Landfill checked:** {landfill_name}")
 
     lr = st.session_state.get("last_run")
     if not lr:
@@ -300,5 +307,5 @@ elif page.lower() == "results":
 st.markdown("---")
 st.caption(
     "Demo app — uses public data sources (FIRMS / TEMPO via Harmony / OpenAQ / PurpleAir / OpenWeatherMap). "
-    "If a service is unavailable or unauthorized, the underlying pipelines may fall back to mock data."
+    "If a service is unavailable or authentication fails, the demo may fall back to mock data."
 )
