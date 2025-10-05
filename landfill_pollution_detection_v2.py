@@ -661,22 +661,15 @@ def _to_target(pollutant: str, value: float, unit: str | None) -> float | None:
 # OpenAQ v3
 # -------------------------------
 # --- Tunables (or set via env) ---
-OPENAQ_RETRIES_PER_CALL      = int(os.environ.get("OPENAQ_RETRIES_PER_CALL", 2))   # per HTTP GET
-OPENAQ_TOTAL_DEADLINE_SEC    = float(os.environ.get("OPENAQ_TOTAL_DEADLINE_SEC", 30))  # whole function budget
-OPENAQ_PER_PAGE_LIMIT        = int(os.environ.get("OPENAQ_PER_PAGE_LIMIT", 200))
-OPENAQ_MAX_PAGES_PER_SENSOR  = int(os.environ.get("OPENAQ_MAX_PAGES_PER_SENSOR", 6))
-OPENAQ_MAX_SENSORS           = int(os.environ.get("OPENAQ_MAX_SENSORS", 40))
-OPENAQ_MAX_SENSOR_ERRORS     = int(os.environ.get("OPENAQ_MAX_SENSOR_ERRORS", 5))
-OPENAQ_INTER_PAGE_SLEEP_S    = float(os.environ.get("OPENAQ_INTER_PAGE_SLEEP_S", 0.15))
-
-def _to_int(x, default=None):
-    try:
-        return int(x)
-    except (TypeError, ValueError):
-        return default
+GROUND_SEARCH_RADIUS_M = 20_000
+OPENAQ_LOOKBACK_HOURS  = 6
+OPENAQ_PER_PAGE_LIMIT  = int(os.environ.get("OPENAQ_PER_PAGE_LIMIT", 500))
+OPENAQ_MAX_PAGES       = int(os.environ.get("OPENAQ_MAX_PAGES", 6))
+OPENAQ_RETRIES_PER_CALL = int(os.environ.get("OPENAQ_RETRIES_PER_CALL", 2))
+OPENAQ_BACKOFF          = float(os.environ.get("OPENAQ_BACKOFF", 1.6))
 
 def _request_json(session, url, params, headers, timeout=15,
-                  retries=OPENAQ_RETRIES_PER_CALL, backoff=1.6,
+                  retries=OPENAQ_RETRIES_PER_CALL, backoff=OPENAQ_BACKOFF,
                   retry_statuses=(408, 429, 500, 502, 503, 504)):
     """GET with bounded retry/backoff; raises on final failure."""
     last_exc = None
@@ -689,7 +682,7 @@ def _request_json(session, url, params, headers, timeout=15,
                 if ra:
                     try:
                         sleep_s = float(ra)
-                    except:
+                    except Exception:
                         sleep_s = (backoff ** attempt) + random.uniform(0, 0.25)
                 else:
                     sleep_s = (backoff ** attempt) + random.uniform(0, 0.25)
@@ -699,177 +692,187 @@ def _request_json(session, url, params, headers, timeout=15,
             return r.json()
         except requests.RequestException as e:
             last_exc = e
-            # network error: backoff if we still have attempts
             if attempt < retries:
                 time.sleep((backoff ** attempt) + random.uniform(0, 0.25))
             else:
                 break
-    # out of attempts
     if isinstance(last_exc, requests.HTTPError) and last_exc.response is not None:
         raise last_exc
     raise requests.RequestException(last_exc)
 
+def _agg_measurements(results, wanted_set):
+    """Aggregate values by parameter (convert units before calling this!)."""
+    sums, counts = {}, {}
+    for m in results:
+        p = (m.get("parameter") or "").lower()
+        if p not in wanted_set:
+            continue
+        v = m.get("value")
+        u = m.get("unit")
+        pol = _canon(p)
+        conv = _to_target(pol, v, u)
+        if conv is None:
+            continue
+        sums[pol]  = sums.get(pol, 0.0) + float(conv)
+        counts[pol] = counts.get(pol, 0) + 1
+    return {k: sums[k] / counts[k] for k in sums} if sums else {}
+
 def get_openaq_latest_v3(lat: float, lon: float,
                          radius_m: int = GROUND_SEARCH_RADIUS_M,
                          lookback_hours: int = OPENAQ_LOOKBACK_HOURS,
-                         parameters=("pm25","pm10","no2","o3","co","so2"),
-                         max_sensors: int = OPENAQ_MAX_SENSORS,
-                         per_page_limit: int = OPENAQ_PER_PAGE_LIMIT,
-                         max_pages_per_sensor: int = OPENAQ_MAX_PAGES_PER_SENSOR,
-                         inter_page_sleep_s: float = OPENAQ_INTER_PAGE_SLEEP_S) -> dict:
+                         parameters=("pm25","pm10","no2","o3","co","so2")) -> dict:
     """
-    v3 flow (bounded and resilient):
-      1) /v3/locations?coordinates=...&radius=...
-      2) /v3/locations/{id}/sensors
-      3) /v3/sensors/{sid}/measurements (paged)
-    Returns pollutant averages in TARGET_UNITS or {} on failure (caller falls back to mock).
+    Primary: query /v3/measurements directly (best coverage & simplest).
+    Fallback: locations -> sensors -> measurements (bounded).
+    Returns pollutant means in TARGET_UNITS.
     """
-    start_time = time.time()
-    def over_deadline():
-        return (time.time() - start_time) > OPENAQ_TOTAL_DEADLINE_SEC
+    headers = {"X-API-Key": OPENAQ_API_KEY} if OPENAQ_API_KEY else {}
+    if not headers:
+        print("Warning: OPENAQ_API_KEY not set; OpenAQ queries will fail with 401.")
 
+    base = "https://api.openaq.org/v3"
+    t_end = datetime.now(timezone.utc)
+    t_start = t_end - timedelta(hours=int(lookback_hours))
+    wanted_csv = ",".join(parameters)
+    wanted_set = set(p.lower() for p in parameters)
+
+    # ---------- 1) MEASUREMENTS-FIRST ----------
     try:
-        headers = {"X-API-Key": OPENAQ_API_KEY} if OPENAQ_API_KEY else {}
-        if not headers:
-            print("Warning: OPENAQ_API_KEY not set. Requests will fail with 401.")
-
-        base = "https://api.openaq.org/v3"
-        t_end = datetime.now(timezone.utc)
-        t_start = t_end - timedelta(hours=int(lookback_hours))
-
         with requests.Session() as sess:
-            # 1) Nearby locations (cap radius at 25 km per docs)
-            if over_deadline():
-                return {}
+            page = 1
+            found_any = False
+            sums, counts = {}, {}
+            while page <= OPENAQ_MAX_PAGES:
+                params = {
+                    "coordinates": f"{lat},{lon}",
+                    "radius": int(min(radius_m, 25000)),
+                    "date_from": t_start.isoformat(timespec="seconds").replace("+00:00","Z"),
+                    "date_to":   t_end.isoformat(timespec="seconds").replace("+00:00","Z"),
+                    "parameters": wanted_csv,
+                    "limit": OPENAQ_PER_PAGE_LIMIT,
+                    "page": page,
+                    "sort": "desc",
+                    "order_by": "datetime",
+                }
+                js = _request_json(sess, f"{base}/measurements", params, headers, timeout=20)
+                results = js.get("results", []) or []
+                if not results:
+                    break
+                found_any = True
+                # aggregate with conversion
+                for m in results:
+                    p = (m.get("parameter") or "").lower()
+                    if p not in wanted_set:
+                        continue
+                    v = m.get("value"); u = m.get("unit")
+                    pol = _canon(p)
+                    conv = _to_target(pol, v, u)
+                    if conv is None:
+                        continue
+                    sums[pol]  = sums.get(pol, 0.0) + float(conv)
+                    counts[pol] = counts.get(pol, 0) + 1
+
+                meta = js.get("meta") or {}
+                found = meta.get("found")
+                limit = meta.get("limit", OPENAQ_PER_PAGE_LIMIT)
+                if found is not None and isinstance(found, int):
+                    if page * limit >= found:
+                        break
+                else:
+                    if len(results) < limit:
+                        break
+                page += 1
+
+            if found_any and sums:
+                return {k: sums[k] / counts[k] for k in sums}
+    except requests.HTTPError as e:
+        code = getattr(e.response, "status_code", None)
+        if code == 401:
+            print("OpenAQ v3 /measurements error: 401 Unauthorized — check OPENAQ_API_KEY.")
+            return {}
+        # Other HTTP errors fall through to fallback path
+    except requests.RequestException as e:
+        # network error; try fallback path
+        pass
+
+    # ---------- 2) FALLBACK: LOCATIONS -> SENSORS ----------
+    try:
+        with requests.Session() as sess:
             loc_params = {
                 "coordinates": f"{lat},{lon}",
                 "radius": int(min(radius_m, 25000)),
-                "limit": 1000
+                "limit": 200
             }
-            try:
-                js = _request_json(sess, f"{base}/locations", loc_params, headers)
-            except requests.HTTPError as e:
-                if getattr(e.response, "status_code", None) == 401:
-                    print("OpenAQ v3 query error: 401 Unauthorized — check OPENAQ_API_KEY.")
-                else:
-                    print(f"OpenAQ v3 locations error: {e}")
-                return {}
-            except requests.RequestException as e:
-                print(f"OpenAQ v3 locations network error: {e}")
+            js = _request_json(sess, f"{base}/locations", loc_params, headers, timeout=20)
+            locs = js.get("results", []) or []
+            if not locs:
                 return {}
 
-            loc_results = js.get("results", [])
-            if not loc_results:
-                return {}
+            # collect a few sensors per parameter (avoid PM2.5-only saturation)
+            per_param_cap = 5
+            picked = {p: [] for p in wanted_set}
 
-            wanted = set(p.lower() for p in parameters)
-
-            # 2) Sensors per location
-            sensor_infos = []  # (sensor_id, parameter_name_lower)
-            sensor_errors = 0
-            for loc in loc_results:
-                if over_deadline():
-                    return {}
+            for loc in locs:
                 loc_id = loc.get("id") or loc.get("locationsId")
                 if not loc_id:
                     continue
                 try:
                     sens_js = _request_json(sess, f"{base}/locations/{loc_id}/sensors",
-                                            {"limit": 1000}, headers)
-                except requests.HTTPError as e:
-                    code = getattr(e.response, "status_code", None)
-                    if code == 404:
-                        continue
-                    sensor_errors += 1
-                    if sensor_errors >= OPENAQ_MAX_SENSOR_ERRORS or over_deadline():
-                        return {}
+                                            {"limit": 1000}, headers, timeout=15)
+                except Exception:
                     continue
-                except requests.RequestException:
-                    sensor_errors += 1
-                    if sensor_errors >= OPENAQ_MAX_SENSOR_ERRORS or over_deadline():
-                        return {}
-                    continue
-
                 for s in sens_js.get("results", []):
                     pblock = s.get("parameter") or {}
                     pname = (pblock.get("name") or "").lower()
                     sid = s.get("id") or s.get("sensorsId")
-                    if sid and pname in wanted:
-                        sensor_infos.append((sid, pname))
-                        if len(sensor_infos) >= max_sensors:
-                            break
-                if len(sensor_infos) >= max_sensors:
-                    break
+                    if sid and pname in wanted_set and len(picked[pname]) < per_param_cap:
+                        picked[pname].append(sid)
 
-            if not sensor_infos:
-                return {}
-
-            # 3) Measurements per sensor, paged
+            # now page through measurements for the picked sensor IDs
             sums, counts = {}, {}
-            for sid, pname in sensor_infos:
-                if over_deadline():
-                    return {}
-                m_params = {
-                    "date_from": t_start.isoformat(timespec="seconds").replace("+00:00","Z"),
-                    "date_to":   t_end.isoformat(timespec="seconds").replace("+00:00","Z"),
-                    "limit": int(per_page_limit),
-                    "page": 1
-                }
-                pages_done = 0
-                while True:
-                    if over_deadline():
-                        return {}
-                    try:
-                        js = _request_json(sess, f"{base}/sensors/{sid}/measurements",
-                                           m_params, headers, timeout=15)
-                    except requests.HTTPError as e:
-                        code = getattr(e.response, "status_code", None)
-                        if code == 404:
-                            break  # sensor offline/retired
-                        # log and give up on this sensor
-                        # print(f"OpenAQ sensor {sid} page {m_params['page']} error: {e}")
-                        break
-                    except requests.RequestException:
-                        # network failure: give up on this sensor page
-                        break
-
-                    results = js.get("results", []) or []
-                    if not results:
-                        break
-
-                    for m in results:
-                        v = m.get("value"); u = m.get("unit")
-                        pol = _canon(pname)
-                        conv = _to_target(pol, v, u)
-                        if conv is None:
-                            continue
-                        sums[pol] = sums.get(pol, 0.0) + float(conv)
-                        counts[pol] = counts.get(pol, 0) + 1
-
-                    meta = js.get("meta") or {}
-                    page_i  = _to_int(meta.get("page"),  m_params["page"])
-                    limit_i = _to_int(meta.get("limit"), m_params["limit"])
-                    found_i = _to_int(meta.get("found"), None)
-
-                    pages_done += 1
-                    if pages_done >= max_pages_per_sensor:
-                        break
-                    if found_i is not None:
-                        if (page_i * limit_i) >= found_i:
+            for pname, sids in picked.items():
+                for sid in sids:
+                    page = 1
+                    while page <= OPENAQ_MAX_PAGES:
+                        params = {
+                            "date_from": t_start.isoformat(timespec="seconds").replace("+00:00","Z"),
+                            "date_to":   t_end.isoformat(timespec="seconds").replace("+00:00","Z"),
+                            "limit": OPENAQ_PER_PAGE_LIMIT,
+                            "page": page,
+                            "sort": "desc",
+                            "order_by": "datetime",
+                        }
+                        try:
+                            js = _request_json(sess, f"{base}/sensors/{sid}/measurements",
+                                               params, headers, timeout=15)
+                        except Exception:
                             break
-                    else:
-                        if len(results) < limit_i:
+                        results = js.get("results", []) or []
+                        if not results:
                             break
+                        for m in results:
+                            v = m.get("value"); u = m.get("unit")
+                            pol = _canon(pname)
+                            conv = _to_target(pol, v, u)
+                            if conv is None:
+                                continue
+                            sums[pol]  = sums.get(pol, 0.0) + float(conv)
+                            counts[pol] = counts.get(pol, 0) + 1
+                        meta = js.get("meta") or {}
+                        found = meta.get("found")
+                        limit = meta.get("limit", OPENAQ_PER_PAGE_LIMIT)
+                        if isinstance(found, int):
+                            if page * limit >= found:
+                                break
+                        else:
+                            if len(results) < limit:
+                                break
+                        page += 1
 
-                    m_params["page"] = page_i + 1
-                    if inter_page_sleep_s:
-                        time.sleep(inter_page_sleep_s)
-
-        return {k: sums[k] / counts[k] for k in sums} if sums else {}
+            return {k: sums[k] / counts[k] for k in sums} if sums else {}
     except Exception as e:
-        print("OpenAQ v3 query error:", e)
+        print("OpenAQ v3 fallback error:", e)
         return {}
-
 
 # -------------------------------
 # PurpleAir (PM2.5 only, µg/m³)
@@ -947,10 +950,11 @@ def get_purpleair_pm25(lat: float, lon: float,
 # -------------------------------
 def get_ground_measurements(lat: float, lon: float) -> dict:
     """
-    - Try OpenAQ v3 for all six pollutants; convert each to TARGET_UNITS before averaging.
-    - If PM2.5 missing, try PurpleAir to fill just PM25 (already ug/m3).
-    - If still empty, return conservative mock values (already in TARGET_UNITS).
+    1) OpenAQ v3 for {PM25, PM10, NO2, O3, CO, SO2}
+    2) If PM2.5 missing, fill from PurpleAir
+    3) If still empty, return MOCK_GROUND
     """
+    
     # 1) OpenAQ v3 (converted to TARGET_UNITS)
     vals = get_openaq_latest_v3(lat, lon)
 
