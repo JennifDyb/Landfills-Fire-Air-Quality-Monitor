@@ -3,9 +3,9 @@ import os
 from datetime import datetime
 import pandas as pd
 import streamlit as st
+import matplotlib.pyplot as plt
 
-# Import your core pipelines (same folder)
-# The file should be: landfill_pollution_detection_v2.py
+# Import your core pipelines
 import landfill_pollution_detection_v2 as core
 
 APP_TITLE = "Landfills Fire & Air Quality Monitor"
@@ -18,12 +18,12 @@ APP_PURPOSE = (
 
 # ---------- Helpers ----------
 def _get_query_page(default="home"):
-    qp = st.experimental_get_query_params()
-    return (qp.get("page", [default])[0] or default).lower()
+    qp = st.query_params
+    return (qp.get("page", default) or default).lower()
 
 def _nav(page_name: str):
-    st.experimental_set_query_params(page=page_name.lower())
-    st.experimental_rerun()
+    st.query_params["page"] = page_name.lower()
+    st.rerun()
 
 def _format_latlon(lat, lon):
     try:
@@ -37,11 +37,59 @@ if "last_run" not in st.session_state:
 if "notifications" not in st.session_state:
     st.session_state["notifications"] = True
 
+# ---------- AQI visualization helpers ----------
+AQI_CATS = [
+    (0,   50,  "Good",                              "#00E400"),
+    (51,  100, "Moderate",                          "#FFFF00"),
+    (101, 150, "Unhealthy for Sensitive Groups",    "#FF7E00"),
+    (151, 200, "Unhealthy",                         "#FF0000"),
+    (201, 300, "Very Unhealthy",                    "#8F3F97"),
+    (301, 500, "Hazardous",                         "#7E0023"),
+]
+
+def aqi_category_and_color(value: float | None):
+    if value is None:
+        return "—", "#999999"
+    v = max(0, min(500, float(value)))
+    for lo, hi, name, hexcol in AQI_CATS:
+        if lo <= v <= hi:
+            return name, hexcol
+    return "Hazardous", "#7E0023"
+
+def plot_aqi_bar(value: float | None, show_label=True, height=0.35):
+    """
+    Draw an EPA-style horizontal AQI bar [0..500] with a vertical marker at `value`.
+    Returns a matplotlib figure for st.pyplot.
+    """
+    fig, ax = plt.subplots(figsize=(7.5, 1.0))
+    left = 0
+    for lo, hi, name, hexcol in AQI_CATS:
+        width = hi - lo
+        ax.barh(y=0, width=width, left=lo, height=height, color=hexcol, edgecolor="black", linewidth=0.5)
+    ax.set_xlim(0, 500)
+    ax.set_yticks([])
+    ax.set_xlabel("AQI", fontsize=9)
+    ax.tick_params(axis='x', labelsize=8)
+
+    if value is not None:
+        v = max(0, min(500, float(value)))
+        ax.axvline(v, color="black", linewidth=2)
+        if show_label:
+            cat, _ = aqi_category_and_color(v)
+            ax.text(v, height + 0.12, f"{int(round(v))} • {cat}", ha="center", va="bottom", fontsize=9)
+
+    plt.tight_layout()
+    return fig
+
 # ---------- Layout ----------
 st.set_page_config(page_title=APP_TITLE, page_icon="🔥", layout="wide")
-
-# Sidebar navigation (simple 3-page app)
-page = st.sidebar.radio("Pages", ["Home", "Monitor", "Results"], index=["home","monitor","results"].index(_get_query_page("home")))
+page_key = _get_query_page("home")
+valid_keys = ["home", "monitor", "results"]
+try:
+    idx = valid_keys.index(page_key)
+except ValueError:
+    idx = 0
+page = st.sidebar.radio("Pages", ["Home", "Monitor", "Results"], index=idx)
 
 st.title(APP_TITLE)
 
@@ -84,17 +132,14 @@ elif page.lower() == "monitor":
     run_col, info_col = st.columns([1,2])
     with run_col:
         run_btn = st.button("🚀 Check now", type="primary")
-
     with info_col:
         st.caption(
-            "On click, the app runs FIRMS check. If a fire is detected, it downloads data to get current AQI and forecast AQI for next 72 hours"           "Pipelines 2–6. "
-            "This may take a short while depending on data access and network."
+            "On click, the app runs FIRMS check. If a fire is detected, it downloads data to get current AQI "
+            "and forecast AQI for next 72 hours (Pipelines 2–6)."
         )
 
     if run_btn:
         with st.spinner("Running pipelines…"):
-            # Orchestrator: runs 1 → (2&3) → 4 → 5 → 6
-            # Set run_parallel=True to fetch TEMPO & Ground concurrently
             out = core.run_workflow_if_fire(
                 lat=float(lat),
                 lon=float(lon),
@@ -104,27 +149,51 @@ elif page.lower() == "monitor":
             )
             st.session_state["last_run"] = out
 
-        # Notify user & offer quick navigation
         if out.get("fire_detected"):
             if st.session_state["notifications"]:
-                st.toast("🔥 Fire detected near the chosen landfill. Click **View details** to see AQI.", icon="🔥")
+                st.toast("🔥 Fire detected near the chosen landfill. Click **Results** to see AQI.", icon="🔥")
             st.success(f"Fire detected near {_format_latlon(lat, lon)}.")
-            st.link_button("➡️ View details (Results page)", on_click=_nav, args=("results",))
         else:
             st.info("No ongoing fire detected near the chosen landfill.")
 
-    # Show a tiny preview of the last run (if any)
+    # ----------- Last run summary (visual) -----------
     if st.session_state["last_run"] is not None:
-        lr = st.session_state["last_run"]
         st.markdown("---")
-        st.markdown("#### Last run summary")
-        st.write(
-            {
-                "time": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%SZ"),
-                "fire_detected": bool(lr.get("fire_detected")),
-                "fused_AQI": lr.get("fused_aqi"),
-            }
-        )
+        st.markdown("### Last run summary")
+
+        lr = st.session_state["last_run"]
+        run_time = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%SZ")
+        fire = bool(lr.get("fire_detected"))
+        fused = lr.get("fused_aqi")
+
+        c1, c2, c3 = st.columns([1,1,3])
+        with c1:
+            st.markdown("**Run time (UTC)**")
+            st.write(run_time)
+        with c2:
+            st.markdown("**Fire detected**")
+            if fire:
+                st.markdown('<span style="color:#D32F2F;font-weight:700;">YES</span>', unsafe_allow_html=True)
+            else:
+                st.markdown('<span style="color:#388E3C;font-weight:700;">NO</span>', unsafe_allow_html=True)
+        with c3:
+            st.markdown("**Fused AQI**")
+            cat, col = aqi_category_and_color(fused)
+            if fused is None:
+                st.write("—")
+            else:
+                st.write(f"{int(round(fused))} • {cat}")
+            fig = plot_aqi_bar(fused)
+            st.pyplot(fig, clear_figure=True)
+
+        # Navigation buttons (no dead hyperlinks)
+        nav1, nav2 = st.columns([1,1])
+        with nav1:
+            if st.button("➡️ Go to Results"):
+                _nav("results")
+        with nav2:
+            if st.button("🏠 Back to Home"):
+                _nav("home")
 
 # ---------- PAGE: RESULTS ----------
 elif page.lower() == "results":
@@ -137,23 +206,39 @@ elif page.lower() == "results":
         if not lr.get("fire_detected"):
             st.success("✅ No ongoing fire.")
             st.caption("If you believe there should be one, try increasing the radius on the Monitor page and re-run.")
-        else:
-            # Show fused AQI (current)
-            fused = lr.get("fused_aqi")
-            colA, colB = st.columns([1,1])
-            with colA:
-                st.metric("Current fused AQI", value=(f"{int(fused)}" if fused is not None else "—"))
 
-            # Show predicted AQI (next hour) + chart
+            # Clear navigation (avoid dead links)
+            colb1, colb2 = st.columns([1,1])
+            with colb1:
+                if st.button("🔁 Run another check"):
+                    _nav("monitor")
+            with colb2:
+                if st.button("🏠 Home"):
+                    _nav("home")
+        else:
+            # Current fused AQI + color bar
+            fused = lr.get("fused_aqi")
+            cA, cB = st.columns([1,3])
+            with cA:
+                st.markdown("**Current fused AQI**")
+                cat, col = aqi_category_and_color(fused)
+                st.markdown(
+                    f'<div style="font-size:28px;font-weight:700;color:{col};">{int(round(fused)) if fused is not None else "—"}</div>'
+                    f'<div style="color:#666;">{cat if fused is not None else ""}</div>',
+                    unsafe_allow_html=True
+                )
+            with cB:
+                fig = plot_aqi_bar(fused)
+                st.pyplot(fig, clear_figure=True)
+
+            # Predicted AQI + chart
             fdf = lr.get("forecast_df")
             if isinstance(fdf, pd.DataFrame) and not fdf.empty and {"datetime","pred_AQI"}.issubset(fdf.columns):
                 next_hour = float(fdf["pred_AQI"].iloc[0])
-                with colB:
-                    st.metric("Predicted AQI (next hour)", value=f"{int(round(next_hour))}")
                 st.markdown("#### 72-hour forecast")
-                plot_df = fdf.copy()
-                plot_df = plot_df.set_index("datetime")[["pred_AQI"]]
+                plot_df = fdf.copy().set_index("datetime")[["pred_AQI"]]
                 st.line_chart(plot_df)
+                st.caption(f"Next-hour predicted AQI: **{int(round(next_hour))}**")
             else:
                 st.warning("No forecast data available (model may have skipped training).")
 
@@ -165,7 +250,17 @@ elif page.lower() == "results":
                     "sat_AQI": lr.get("sat_aqi_value"),
                     "ground_AQI": lr.get("ground_aqi_value"),
                     "valid_rmse": lr.get("valid_rmse"),
+                    "training_fallback_reason": lr.get("training_fallback_reason"),
                 })
+
+            # Clean navigation (no empty hyperlinks)
+            colb1, colb2 = st.columns([1,1])
+            with colb1:
+                if st.button("🔁 Run another check"):
+                    _nav("monitor")
+            with colb2:
+                if st.button("🏠 Home"):
+                    _nav("home")
 
 # Footer
 st.markdown("---")
