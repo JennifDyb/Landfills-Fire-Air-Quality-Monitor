@@ -4,6 +4,7 @@ from datetime import datetime
 import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
+import math
 
 # Import your core pipelines
 import landfill_pollution_detection_v2 as core
@@ -17,6 +18,45 @@ APP_PURPOSE = (
 )
 
 # ---------- Helpers ----------
+
+def _fmt_value(val, unit=None, digits=2):
+    """Return a friendly string or 'Could not get measurement' for missing values."""
+    if val is None:
+        return "Could not get measurement"
+    try:
+        v = float(val)
+        if math.isnan(v):
+            return "Could not get measurement"
+        s = f"{v:.{digits}f}"
+    except Exception:
+        return "Could not get measurement"
+    return f"{s} {unit}" if unit else s
+
+def render_cards(title, items, cols=3):
+    """
+    items: list of tuples (label, value_str) already formatted
+    Renders as compact 'cards' using columns.
+    """
+    st.markdown(f"#### {title}")
+    rows = (len(items) + cols - 1) // cols
+    for r in range(rows):
+        cols_row = st.columns(cols)
+        for c in range(cols):
+            idx = r * cols + c
+            if idx >= len(items): 
+                continue
+            label, val = items[idx]
+            with cols_row[c]:
+                st.markdown(
+                    f"""
+                    <div style="border:1px solid rgba(200,200,200,.4); border-radius:10px; padding:.6rem .8rem; margin-bottom:.5rem;">
+                        <div style="font-size:.85rem; color:#666;">{label}</div>
+                        <div style="font-size:1.1rem; font-weight:600;">{val}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
 def _get_query_page(default="home"):
     qp = st.query_params
     return (qp.get("page", default) or default).lower()
@@ -246,20 +286,31 @@ elif page.lower() == "monitor":
 elif page.lower() == "results":
     st.subheader("Results")
 
-
+    # --- Landfill name (if chosen on Monitor page) ---
     landfill_name = st.session_state.get("selected_landfill_name")
     if landfill_name:
         st.markdown(f"**Landfill checked:** {landfill_name}")
 
+    # --- Last run results ---
     lr = st.session_state.get("last_run")
+
     if not lr:
         st.info("No results yet. Go to **Monitor** and click **Check now**.")
+        col_a, col_b = st.columns([1, 3])
+        with col_a:
+            if st.button("Go to Monitor", key="go_to_monitor_results_empty"):
+                new_qp = dict(st.query_params)
+                new_qp["page"] = "Monitor"
+                st.query_params = new_qp
+                st.rerun()
+        with col_b:
+            st.markdown("Or click this link: [Open Monitor](?page=Monitor)")
+
     else:
         if not lr.get("fire_detected"):
             st.success("✅ No ongoing fire.")
             st.caption("If you believe there should be one, try increasing the radius on the Monitor page and re-run.")
 
-            # Clear navigation (avoid dead links)
             colb1, colb2 = st.columns([1,1])
             with colb1:
                 if st.button("🔁 Run another check"):
@@ -267,8 +318,9 @@ elif page.lower() == "results":
             with colb2:
                 if st.button("🏠 Home"):
                     _nav("home")
+
         else:
-            # Current fused AQI + color bar
+            # --- Current fused AQI + color bar ---
             fused = lr.get("fused_aqi")
             cA, cB = st.columns([1,3])
             with cA:
@@ -283,7 +335,7 @@ elif page.lower() == "results":
                 fig = plot_aqi_bar(fused)
                 st.pyplot(fig, clear_figure=True)
 
-            # Predicted AQI + chart
+            # --- Predicted AQI + chart ---
             fdf = lr.get("forecast_df")
             if isinstance(fdf, pd.DataFrame) and not fdf.empty and {"datetime","pred_AQI"}.issubset(fdf.columns):
                 next_hour = float(fdf["pred_AQI"].iloc[0])
@@ -294,18 +346,60 @@ elif page.lower() == "results":
             else:
                 st.warning("No forecast data available (model may have skipped training).")
 
-            # Optional details
-            with st.expander("More details"):
-                st.write({
-                    "satellite_current": lr.get("satellite_current"),
-                    "ground_current": lr.get("ground_current"),
-                    "sat_AQI": lr.get("sat_aqi_value"),
-                    "ground_AQI": lr.get("ground_aqi_value"),
-                    "valid_rmse": lr.get("valid_rmse"),
-                    "training_fallback_reason": lr.get("training_fallback_reason"),
-                })
+            # --- More details: friendly cards instead of raw JSON ---
+            with st.expander("More details", expanded=False):
+                satellite_current = lr.get("satellite_current", {}) or {}
+                ground_current    = lr.get("ground_current", {}) or {}
+                sat_breakdown     = lr.get("sat_breakdown", {}) or {}
+                ground_breakdown  = lr.get("ground_breakdown", {}) or {}
 
-            # Clean navigation (no empty hyperlinks)
+                # Satellite (TEMPO): show all keys even if missing
+                sat_expected = [
+                    ("NO2 (molec/cm²)",          satellite_current.get("NO2"),  None),
+                    ("O3 trop (molec/cm²)",      satellite_current.get("O3"),   None),
+                    ("HCHO (molec/cm²)",         satellite_current.get("HCHO"), None),
+                    ("UV Aerosol Index (UVAI)",  satellite_current.get("AER"),  None),
+                ]
+                sat_items = [(label, _fmt_value(val, unit)) for (label, val, unit) in sat_expected]
+                render_cards("Satellite (TEMPO)", sat_items, cols=2)
+
+                # Ground (OpenAQ / PurpleAir fallback): always show all six
+                ground_expected = [
+                    ("PM2.5 (µg/m³)", ground_current.get("PM25"), "µg/m³"),
+                    ("PM10 (µg/m³)",  ground_current.get("PM10"), "µg/m³"),
+                    ("NO₂ (ppb)",     ground_current.get("NO2"),  "ppb"),
+                    ("O₃ (ppb)",      ground_current.get("O3"),   "ppb"),
+                    ("CO (ppm)",      ground_current.get("CO"),   "ppm"),
+                    ("SO₂ (ppb)",     ground_current.get("SO2"),  "ppb"),
+                ]
+                ground_items = [(label, _fmt_value(val, unit)) for (label, val, unit) in ground_expected]
+                render_cards("Ground (OpenAQ / PurpleAir)", ground_items, cols=3)
+
+                # AQI sub-indices (optional)
+                if isinstance(sat_breakdown, dict) and sat_breakdown:
+                    s_items = [(k, _fmt_value(v, None, digits=0)) for k, v in sat_breakdown.items()]
+                    render_cards("Satellite AQI sub-indices", s_items, cols=3)
+
+                if isinstance(ground_breakdown, dict) and ground_breakdown:
+                    display_order = ["PM25", "PM10", "NO2", "O3", "CO", "SO2"]
+                    g_items = []
+                    for pol in display_order:
+                        sub = ground_breakdown.get(pol, {})
+                        val = sub.get("subindex") if isinstance(sub, dict) else None
+                        g_items.append((pol, _fmt_value(val, None, digits=0)))
+                    render_cards("Ground AQI sub-indices", g_items, cols=3)
+
+                # Training diagnostics (if available)
+                diag_left, diag_right = st.columns([1,2])
+                with diag_left:
+                    st.metric("Validation RMSE", _fmt_value(lr.get("valid_rmse"), None, digits=1))
+                with diag_right:
+                    reason = lr.get("training_fallback_reason") or "—"
+                    st.caption(f"Training note: {reason}")
+
+                st.caption("Values sourced from NASA TEMPO (via Harmony) and OpenAQ v3 (with PurpleAir only for PM2.5 when missing).")
+
+            # --- Navigation ---
             colb1, colb2 = st.columns([1,1])
             with colb1:
                 if st.button("🔁 Run another check"):
