@@ -174,7 +174,7 @@ elif page.lower() == "monitor":
         )
 
     if run_btn:
-        with st.spinner("AQI calculations ongoing…"):
+        with st.spinner("Checking for fire at chosen landfill…"):
             out = core.run_workflow_if_fire(
                 lat=float(lat),
                 lon=float(lon),

@@ -537,7 +537,7 @@ def request_tempo_subset(lat: float, lon: float, days_back: int = 1,
     return results
 
 
-# ---- Run satellite ingestion (example) ----
+# ---- Run satellite ingestion ----
 satellite_current = request_tempo_subset(LANDFILL["lat"], LANDFILL["lon"], days_back=1)
 print("Satellite values (TEMPO or mock):")
 print(satellite_current)
