@@ -1676,12 +1676,11 @@ def run_workflow_if_fire(lat: float, lon: float,
         history_df = build_synthetic_history(days=90)
 
     try:
-        forecast_df, valid_rmse, fallback_reason = train_and_forecast_safe(
-            history_df=history_df,
-            fused_value=fused_value,
-            current_meteo=current_meteo,
-            horizon=int(forecast_horizon_h),
-        )
+        forecast_df, metrics = train_and_forecast_safe(history_df, current_meteo, fused_value,
+                                               horizon=forecast_horizon_h)
+        valid_rmse = metrics.get("rmse")
+        confidence = metrics.get("confidence")
+        training_fallback_reason = metrics.get("fallback_reason")
     except Exception as e:
         print("Training error (unexpected); falling back to persistence:", e)
         # Absolute safety fallback: persistence
@@ -1708,6 +1707,7 @@ def run_workflow_if_fire(lat: float, lon: float,
         "current_meteo": current_meteo,
         "forecast_df": forecast_df,
         "valid_rmse": valid_rmse,
+        "confidence_score": confidence,
         "training_fallback_reason": fallback_reason,
     }
 

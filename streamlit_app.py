@@ -392,7 +392,12 @@ elif page.lower() == "results":
                 # Training diagnostics (if available)
                 diag_left, diag_right = st.columns([1,2])
                 with diag_left:
-                    st.metric("Validation RMSE", _fmt_value(lr.get("valid_rmse"), None, digits=1))
+                    conf = lr.get("confidence_score")
+                    if conf is None:
+                        st.metric("Forecast confidence", "—")
+                    else:
+                        # nice formatting: 0–100, no decimals
+                        st.metric("Forecast confidence", f"{int(round(conf))} / 100")
                 with diag_right:
                     reason = lr.get("training_fallback_reason") or "—"
                     st.caption(f"Training note: {reason}")
