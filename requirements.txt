@@ -5,7 +5,7 @@ streamlit>=1.36
 numpy>=1.24
 pandas>=2.0
 requests>=2.31
-#python-dotenv>=1.0
+python-dotenv>=0.20,<0.21 
 
 # --- Plotting (local charts; Streamlit also has built-in charts) ---
 matplotlib>=3.7
@@ -14,7 +14,7 @@ matplotlib>=3.7
 lightgbm>=4.0
 
 # --- Satellite / NetCDF (TEMPO via Harmony) ---
-harmony-py>=0.6
+harmony-py>=1.0,<1.4
 xarray>=2023.6.0
 netCDF4>=1.6
 h5netcdf>=1.2
